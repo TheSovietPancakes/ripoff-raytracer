@@ -1,3 +1,6 @@
+// VISITORS BEWARE:
+// This latest push, which added triangles, crashed my GPU multiple times on higher resolutions.
+// Save all work before running this program.
 #define CL_TARGET_OPENCL_VERSION 300
 #include <CL/cl.h>
 #include <array>
@@ -10,35 +13,15 @@
 #include <thread>
 #include <vector>
 
+#include "readobj.hpp"
+
 // glfw
 #include <GLFW/glfw3.h>
-
-using float3 = cl_float3;
-using float4 = cl_float4;
-
-typedef struct {
-  float3 position;
-  float pitch, yaw, roll;
-  float fov;
-  float aspectRatio;
-} CameraInformation;
-
-typedef struct {
-  float3 color;
-  float3 emissionColor = {0.0f, 0.0f, 0.0f};
-  float emissionStrength = 0.0f;
-} RayTracingMaterial;
-
-typedef struct {
-  float3 center = {0.0f, 0.0f, 0.0f};
-  float radius = 1.0f;
-  RayTracingMaterial material;
-} Sphere;
 
 std::string loadKernelSource(const std::string& filename) {
   std::ifstream file(filename);
   if (!file.is_open()) {
-    throw std::runtime_error("Failed to open kernel file: " + filename);
+    exit(1);
   }
   return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 }
@@ -91,37 +74,67 @@ void placeImageDataIntoBMP(const std::vector<unsigned char>& pixels, int width, 
   file.close();
 }
 
+bool windowIsFocused = true;
+
 int main() {
-  const int width = 1920;
-  const int height = 1080;
+  // const int width = 1920;
+  // const int height = 1080;
   // 720p
   // const int width = 1280;
   // const int height = 720;
+  const int width = 128;
+  const int height = 128;
 
-  glfwInit();
+  cl_int err;
+  err = glfwInit();
+  if (err != GLFW_TRUE) {
+    std::cerr << "Failed to initialize GLFW\n";
+    return 1;
+  }
   GLFWwindow* window = glfwCreateWindow(width, height, "GPU Test", nullptr, nullptr);
   glfwMakeContextCurrent(window);
 
-  cl_int err;
   cl_uint numPlatforms;
-  clGetPlatformIDs(0, nullptr, &numPlatforms);
+  err = clGetPlatformIDs(0, nullptr, &numPlatforms);
+  if (err != CL_SUCCESS || numPlatforms == 0) {
+    std::cerr << "Failed to find any OpenCL platforms\n";
+    return 1;
+  }
   std::vector<cl_platform_id> platforms(numPlatforms);
-  clGetPlatformIDs(numPlatforms, platforms.data(), nullptr);
+  err = clGetPlatformIDs(numPlatforms, platforms.data(), nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get OpenCL platform IDs\n";
+    return 1;
+  }
   cl_platform_id platform = platforms[0]; // Pick one lol
 
   cl_uint numDevices;
-  clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
+  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get number of OpenCL devices\n";
+    return 1;
+  }
   std::vector<cl_device_id> devices(numDevices);
-  clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices.data(), nullptr);
+  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices.data(), nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get OpenCL device IDs\n";
+    return 1;
+  }
   cl_device_id device = devices[0]; // Pick one lol
 
   // --- get device info
   cl_uint compUnits = 0;
   cl_ulong globalMem = 0;
-  clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), &compUnits, nullptr);
-  clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(cl_ulong), &globalMem, nullptr);
-  std::cout << "Compute Units: " << compUnits << "\n";
-  std::cout << "Global Memory: " << (globalMem / (1024 * 1024)) << " MB\n";
+  err = clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), &compUnits, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get device info\n";
+    return 1;
+  }
+  err = clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(cl_ulong), &globalMem, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get device info\n";
+    return 1;
+  }
 
   cl_context ctx = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
   if (err != CL_SUCCESS) {
@@ -153,30 +166,81 @@ int main() {
 
   cl_kernel kernel = clCreateKernel(program, "raytrace", &err);
   if (err != CL_SUCCESS) {
-    std::cout << "error creating kernel\n" << std::endl;
+    std::cerr << "Failed to create kernel\n";
     return 1;
   }
 
-  std::vector<Sphere> spheres = {Sphere{.center = {2000.0f, 0.0f, 0.0f},
-                                        .radius = 999.0f,
-                                        .material = {.color = {0.0f, 0.0f, 0.0f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 2.0f}},
-                                 Sphere{.center = {0.0f, 0.0f, -5.0f},
-                                        .radius = 1.0f,
-                                        .material = {.color = {1.0f, 0.5f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}},
-                                 Sphere{.center = {0.0f, 500.0f, -5.0f},
-                                        .radius = 499.0f,
-                                        .material = {.color = {0.1f, 0.7f, 0.5f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}},
-                                 Sphere{.center = {-5.0f, 0.0f, 0.0f},
-                                        .radius = 1.0f,
-                                        .material = {.color = {1.0f, 0.5f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}},
-                                 Sphere{.center = {5.0f, 0.0f, 0.0f},
-                                        .radius = 1.0f,
-                                        .material = {.color = {1.0f, 0.0f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 1.0f}},
-                                 Sphere{.center = {0.0f, 0.0f, 5.0f},
-                                        .radius = 1.0f,
-                                        .material = {.color = {1.0f, 0.5f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}}};
-  cl_mem sphereBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, spheres.size() * sizeof(Sphere), spheres.data(), &err);
+  // std::vector<Sphere> spheres = {Sphere{.center = {2000.0f, 0.0f, 0.0f},
+  //                                       .radius = 999.0f,
+  //                                       .material = {.color = {0.0f, 0.0f, 0.0f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 2.0f}},
+  //                                Sphere{.center = {0.0f, 0.0f, -5.0f},
+  //                                       .radius = 1.0f,
+  //                                       .material = {.color = {1.0f, 0.5f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}},
+  //                                Sphere{.center = {0.0f, 500.0f, -5.0f},
+  //                                       .radius = 499.0f,
+  //                                       .material = {.color = {0.1f, 0.7f, 0.5f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}},
+  //                                Sphere{.center = {-5.0f, 0.0f, 0.0f},
+  //                                       .radius = 1.0f,
+  //                                       .material = {.color = {1.0f, 0.5f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}},
+  //                                Sphere{.center = {5.0f, 0.0f, 0.0f},
+  //                                       .radius = 1.0f,
+  //                                       .material = {.color = {1.0f, 0.0f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 1.0f}},
+  //                                Sphere{.center = {0.0f, 0.0f, 5.0f},
+  //                                       .radius = 1.0f,
+  //                                       .material = {.color = {1.0f, 0.5f, 0.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}}};
+  // cl_mem sphereBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, spheres.size() * sizeof(Sphere), spheres.data(), &err);
+  std::vector<Triangle> triangles;
+  // for (auto& tri : triangles) {
+  //   for (auto* v : {&tri.posA, &tri.posB, &tri.posC}) {
+  //     // scale up
+  //     v->x *= 5.0f;
+  //     v->y *= 5.0f;
+  //     v->z *= 5.0f;
+  //     // move back
+  //     v->z -= 5.0f;
+  //   }
+  // }
+
+  loadOBJFile("/home/sovietpancakes/Desktop/Code/gputest/dragon.obj", triangles);
+  cl_mem triangleBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, triangles.size() * sizeof(Triangle), triangles.data(), &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create triangle buffer\n";
+    return 1;
+  }
+  std::vector<MeshInfo> meshes;
+  {
+    MeshInfo mesh;
+    mesh.firstTriangleIdx = 0;
+    mesh.numTriangles = triangles.size();
+    mesh.boundsMin = {CL_HUGE_VALF, CL_HUGE_VALF, CL_HUGE_VALF};
+    mesh.boundsMax = {-CL_HUGE_VALF, -CL_HUGE_VALF, -CL_HUGE_VALF};
+
+    // compute AABB
+    for (auto& tri : triangles) {
+      for (auto& v : {tri.posA, tri.posB, tri.posC}) {
+        mesh.boundsMin.x = std::min(mesh.boundsMin.x, v.x);
+        mesh.boundsMin.y = std::min(mesh.boundsMin.y, v.y);
+        mesh.boundsMin.z = std::min(mesh.boundsMin.z, v.z);
+
+        mesh.boundsMax.x = std::max(mesh.boundsMax.x, v.x);
+        mesh.boundsMax.y = std::max(mesh.boundsMax.y, v.y);
+        mesh.boundsMax.z = std::max(mesh.boundsMax.z, v.z);
+      }
+    }
+    mesh.material = {{0.8f, 0.8f, 0.8f}, {1, 1, 1}, 1.0f};
+
+    meshes.push_back(mesh);
+  }
+  cl_mem meshBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, meshes.size() * sizeof(MeshInfo), meshes.data(), &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create mesh buffer\n";
+    return 1;
+  }
   cl_mem imageBuffer = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY, width * height * sizeof(cl_uchar4), nullptr, &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create image buffer\n";
+    return 1;
+  }
 
   // --- Simple GL setup (after creating context)
   glfwSwapInterval(1); // vsync = 1 (avoid hogging)
@@ -202,25 +266,57 @@ int main() {
   std::vector<unsigned char> pixels(width * height * 4, 0);
 
   // args (same order as kernel)
-  cl_int sphereCount = (cl_int)spheres.size();
-  clSetKernelArg(kernel, 0, sizeof(cl_mem), &sphereBuffer);
-  clSetKernelArg(kernel, 1, sizeof(cl_int), &sphereCount);
-  clSetKernelArg(kernel, 2, sizeof(cl_mem), &imageBuffer);
-  clSetKernelArg(kernel, 3, sizeof(cl_int), &width);
-  clSetKernelArg(kernel, 4, sizeof(cl_int), &height);
+  cl_int meshCount = (cl_int)meshes.size();
+  // *meshes, *triangles, meshCount, *image, width, height, cam, frame
+  err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &meshBuffer);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 1, sizeof(cl_mem), &triangleBuffer);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 2, sizeof(cl_int), &meshCount);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 3, sizeof(cl_mem), &imageBuffer);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 4, sizeof(cl_int), &width);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 5, sizeof(cl_int), &height);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
   CameraInformation camInfo = {
       .position = {0.0f, 0.0f, 0.0f}, .pitch = 0.0f, .yaw = 0.0f, .roll = 0.0f, .fov = 90.0f, .aspectRatio = (float)width / (float)height};
-  clSetKernelArg(kernel, 5, sizeof(CameraInformation), &camInfo);
+  err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
   cl_uint numFrames = 1;
-  clSetKernelArg(kernel, 6, sizeof(cl_int), &numFrames);
+  err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
+    return 1;
+  }
 
   size_t global[2] = {(size_t)width, (size_t)height};
 
-  // Debug tip: use a smaller size while debugging (uncomment to test).
-  // const int dbgW = 640, dbgH = 360;
-  // size_t global[2] = { (size_t)dbgW, (size_t)dbgH };
   std::chrono::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
   cl_uint targetAvgNum = 100;
+  glfwSetWindowFocusCallback(window, [](GLFWwindow* win, int focused) { windowIsFocused = focused != 0; });
   bool isRendering = false;
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
@@ -233,7 +329,6 @@ int main() {
       // "R"ender by averaging frames together
       isRendering = true;
       numFrames = 1;
-      std::cout << "Beginning rendering 0/" << targetAvgNum << " frames...\n";
     }
 
     if (isRendering) {
@@ -249,19 +344,32 @@ int main() {
         for (size_t i = 0; i < pixels.size(); ++i) {
           finalImg[i] = static_cast<unsigned char>(std::min<uint32_t>(255u, intBuffer[i] / numFrames));
         }
-        std::cout << "\nFinished rendering " << numFrames << " frames, saving to output.bmp\n";
         placeImageDataIntoBMP(finalImg, width, height, "output.bmp");
         isRendering = false;
         continue;
       }
 
       // --- Run kernel with a seed derived from numFrames
-      clSetKernelArg(kernel, 6, sizeof(cl_int), &numFrames);
-      clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
-      clFinish(queue); // safer than flush when reading back
-
-      clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
-
+      err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        break;
+      }
+      err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to enqueue kernel: " << err << "\n";
+        break;
+      }
+      err = clFinish(queue); // safer than flush when reading back
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to finish command queue: " << err << "\n";
+        break;
+      }
+      err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to read buffer: " << err << "\n";
+        break;
+      }
       // Accumulate this frame
       for (size_t i = 0; i < pixels.size(); ++i) {
         intBuffer[i] += pixels[i];
@@ -275,18 +383,20 @@ int main() {
       }
       glBindTexture(GL_TEXTURE_2D, texture);
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, accumBuffer.data());
-
-      std::cout << "\rAccumulating frames: " << numFrames << "/" << targetAvgNum << std::flush;
     }
 
     std::chrono::time_point nowTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration deltaTime = nowTime - lastRecordedTime;
     unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(deltaTime).count();
+    lastRecordedTime = nowTime;
     if (millisecondsPassed > 0)
-      std::cout << "\rfps: " << std::to_string(1000 / (millisecondsPassed)) << std::flush;
+      std::cout << "\rfps: " << 1000.0f / (float)millisecondsPassed << std::flush;
+      if (!windowIsFocused) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(17));
+        continue;
+      }
     if (!isRendering) {
       float deltaSeconds = (float)millisecondsPassed / 1000;
-      lastRecordedTime = nowTime;
       const float moveSpeed = 6.0f;
       const float rotSpeed = 6.0f;
       if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
@@ -312,10 +422,10 @@ int main() {
         camInfo.position.y += moveSpeed * deltaSeconds;
       }
       if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
-        camInfo.pitch += rotSpeed * deltaSeconds;
+        camInfo.pitch -= rotSpeed * deltaSeconds;
       }
       if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
-        camInfo.pitch -= rotSpeed * deltaSeconds;
+        camInfo.pitch += rotSpeed * deltaSeconds;
       }
       if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
         camInfo.yaw -= rotSpeed * deltaSeconds;
@@ -324,19 +434,22 @@ int main() {
         camInfo.yaw += rotSpeed * deltaSeconds;
       }
       // Update camera info arg
-      clSetKernelArg(kernel, 5, sizeof(CameraInformation), &camInfo);
-
+      err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        break;
+      }
       // Enqueue kernel
-      cl_int qerr = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
-      if (qerr != CL_SUCCESS) {
-        std::cerr << "Failed to enqueue kernel: " << qerr << "\n";
+      err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to enqueue kernel: " << err << "\n";
         break;
       }
 
       // Make sure commands have been submitted to the device
-      cl_int flushErr = clFlush(queue);
-      if (flushErr != CL_SUCCESS) {
-        std::cerr << "Failed to flush command queue: " << flushErr << "\n";
+      err = clFlush(queue);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to flush command queue: " << err << "\n";
         break;
       }
 
@@ -345,9 +458,9 @@ int main() {
       // Optional: glFinish() to avoid driver-side GL <-> CL race (if using GL interop later)
       glFinish();
 
-      cl_int readErr = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, bytesToRead, pixels.data(), 0, nullptr, nullptr);
-      if (readErr != CL_SUCCESS) {
-        std::cerr << "Failed to read buffer: " << readErr << "\n";
+      err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, bytesToRead, pixels.data(), 0, nullptr, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to read buffer: " << err << "\n";
         break;
       }
       // Upload to the bound OpenGL texture (bind to be explicit)
@@ -390,13 +503,46 @@ int main() {
 
   // Cleanup
   glDeleteTextures(1, &texture);
-  clFinish(queue);
-  clReleaseMemObject(sphereBuffer);
-  clReleaseMemObject(imageBuffer);
-  clReleaseKernel(kernel);
-  clReleaseProgram(program);
-  clReleaseCommandQueue(queue);
-  clReleaseContext(ctx);
+  err = clFinish(queue);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to finish command queue: " << err << "\n";
+    return 1;
+  }
+  err = clReleaseMemObject(meshBuffer);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release mesh buffer: " << err << "\n";
+    return 1;
+  }
+  err = clReleaseMemObject(triangleBuffer);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release triangle buffer: " << err << "\n";
+    return 1;
+  }
+  err = clReleaseMemObject(imageBuffer);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release image buffer: " << err << "\n";
+    return 1;
+  }
+  err = clReleaseKernel(kernel);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release kernel: " << err << "\n";
+    return 1;
+  }
+  err = clReleaseProgram(program);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release program: " << err << "\n";
+    return 1;
+  }
+  err = clReleaseCommandQueue(queue);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release command queue: " << err << "\n";
+    return 1;
+  }
+  err = clReleaseContext(ctx);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release context: " << err << "\n";
+    return 1;
+  }
   glfwTerminate();
 
   return 0;

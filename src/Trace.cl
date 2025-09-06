@@ -100,29 +100,46 @@ float3 RandomHemisphereDirection(float3 normal, __private uint *state) {
 }
 
 HitInfo RayTriangle(Ray ray, Triangle tri) {
-  float3 edgeAB = tri.posB - tri.posA;
-  float3 edgeAC = tri.posC - tri.posA;
-  float3 normalVec = cross(edgeAB, edgeAC);
-  float3 ao = ray.origin - tri.posA;
-  float3 dao = dot(normalVec, ray.direction);
+  const float EPSILON = 1e-6f;
+  float3 edge1 = tri.posB - tri.posA;
+  float3 edge2 = tri.posC - tri.posA;
 
-  float determinant = -dot(normalVec, ao);
-  float invDet = 1.0f / determinant;
+  float3 h = cross(ray.direction, edge2);
+  float a = dot(edge1, h);
+  if (fabs(a) < EPSILON) {
+    HitInfo miss = {.didHit = false};
+    return miss; // Ray parallel to triangle
+  }
 
-  // calculate distance to triangle & barycentric coords of intersect point
-  float dst = dot(ao, normalVec) * invDet;
-  float u = dot(cross(ray.direction, edgeAC), ao) * invDet;
-  float v = dot(cross(edgeAB, ray.direction), ao) * invDet;
-  float w = 1.0f - u - v;
+  float f = 1.0f / a;
+  float3 s = ray.origin - tri.posA;
+  float u = f * dot(s, h);
+  if (u < 0.0f || u > 1.0f) {
+    HitInfo miss = {.didHit = false};
+    return miss;
+  }
 
-  HitInfo hitInfo;
-  hitInfo.didHit =
-      determinant >= 1E-6f && dst >= 0 && u >= 0 && v >= 0 && w >= 0;
-  hitInfo.hitPoint = ray.origin + ray.direction * dst;
-  hitInfo.normal =
-      normalize(tri.normalA * w + tri.normalB * u + tri.normalC * v);
-  hitInfo.dst = dst;
-  return hitInfo;
+  float3 q = cross(s, edge1);
+  float v = f * dot(ray.direction, q);
+  if (v < 0.0f || u + v > 1.0f) {
+    HitInfo miss = {.didHit = false};
+    return miss;
+  }
+
+  float t = f * dot(edge2, q);
+  if (t > EPSILON) {
+    HitInfo hit;
+    hit.didHit = true;
+    hit.dst = t;
+    hit.hitPoint = ray.origin + ray.direction * t;
+    // Interpolate vertex normals
+    float w = 1.0f - u - v;
+    hit.normal = normalize(tri.normalA * w + tri.normalB * u + tri.normalC * v);
+    return hit;
+  }
+
+  HitInfo miss = {.didHit = false};
+  return miss;
 }
 
 HitInfo RaySphere(Ray ray, float3 sphereCenter, float sphereRadius) {
@@ -181,7 +198,8 @@ bool RayBoundingBox(Ray ray, float3 boxMin, float3 boxMax) {
 
 HitInfo CalculateRayCollisionWithTriangle(Ray ray,
                                           __global const MeshInfo *meshes,
-                                          int meshCount, __global const Triangle *triangles) {
+                                          int meshCount,
+                                          __global const Triangle *triangles) {
   HitInfo closestHit;
   closestHit.dst = INFINITY;
   closestHit.didHit = false;
@@ -237,15 +255,16 @@ float3 lerp3(float3 a, float3 b, float t) { return a * (1.0f - t) + b * t; }
 
 float lerp(float a, float b, float t) { return a * (1.0f - t) + b * t; }
 
-float3 Trace(Ray ray, __private uint *rngState, /* __global const MeshInfo *meshes,
-             int meshCount, __global const Triangle *triangles */
-             __global const Sphere *spheres, int sphereCount) {
+float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
+             int meshCount, __global const Triangle *triangles) {
   float3 incomingLight = 0;
   float3 rayColor = 1;
-  const uint MaxBounceCount = 30;
+  const uint MaxBounceCount = 1;
   for (uint i = 0; i <= MaxBounceCount; i++) {
-    // HitInfo hitInfo = CalculateRayCollisionWithTriangle(ray, meshes, meshCount, triangles);
-    HitInfo hitInfo = CalculateRayCollisionWithSphere(ray, spheres, sphereCount);
+    HitInfo hitInfo =
+        CalculateRayCollisionWithTriangle(ray, meshes, meshCount, triangles);
+    // HitInfo hitInfo =
+    //     CalculateRayCollisionWithSphere(ray, spheres, sphereCount);
     if (hitInfo.didHit) {
       ray.origin = hitInfo.hitPoint;
       ray.direction = normalize(hitInfo.normal + RandomDirection(rngState));
@@ -263,28 +282,28 @@ float3 Trace(Ray ray, __private uint *rngState, /* __global const MeshInfo *mesh
   return incomingLight;
 }
 
-__kernel void raytrace(/* __global const MeshInfo *meshes, __global const Triangle *triangles, int meshCount, */
-                        __global const Sphere *spheres, int sphereCount,
+__kernel void raytrace(__global const MeshInfo *meshes,
+                       __global const Triangle *triangles, int meshCount,
                        __global uchar4 *image, int width, int height,
                        CameraInformation camInfo, int frameIndex) {
   uint x = get_global_id(0);
   uint y = get_global_id(1);
   uint pixelIndex = y * width + x;
 
-  float2 uv = (float2)((float)x / (float)width, (float)y / (float)height);
+  float2 uv = (float2)((float)x / (float)width, (float)(1.0f - y / (float)height));
   Ray ray = MakeRay(camInfo, uv);
 
-  const uint IncomingRaysPerPixel = 50;
+  const uint IncomingRaysPerPixel = 1;
   float3 accum = (float3)(0.0f, 0.0f, 0.0f);
   for (uint s = 0; s < IncomingRaysPerPixel; ++s) {
     // use different seed per sample
     // uint seed = MakeSeed(pixelIndex, frameIndex, s);
-    // inside Trace we compute seed again but you can also pass seed pointer if
-    // you prefer
+    // inside Trace we compute seed again but you can also pass seed pointer
+    // if you prefer
     uint seed = MakeSeed(pixelIndex, frameIndex, s);
     __private uint rngState = seed;
     // accum += Trace(ray, &rngState, meshes, meshCount, triangles);
-    accum += Trace(ray, &rngState, spheres, sphereCount);
+    accum += Trace(ray, &rngState, meshes, meshCount, triangles);
   }
   float3 pixelColor = accum / (float)IncomingRaysPerPixel;
 
