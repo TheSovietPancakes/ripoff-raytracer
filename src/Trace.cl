@@ -33,6 +33,7 @@ typedef struct {
   uint numTriangles;
   float3 boundsMin;
   float3 boundsMax;
+  float3 pos;
   RayTracingMaterial material;
 } MeshInfo;
 
@@ -98,11 +99,14 @@ float3 RandomHemisphereDirection(float3 normal, __private uint *state) {
     dir = -dir;
   return dir;
 }
-
-HitInfo RayTriangle(Ray ray, Triangle tri) {
+HitInfo RayTriangle(Ray ray, Triangle tri, float3 offset) {
   const float EPSILON = 1e-6f;
-  float3 edge1 = tri.posB - tri.posA;
-  float3 edge2 = tri.posC - tri.posA;
+  Triangle triangle = tri;
+  tri.posA += offset;
+  tri.posB += offset;
+  tri.posC += offset;
+  float3 edge1 = triangle.posB - triangle.posA;
+  float3 edge2 = triangle.posC - triangle.posA;
 
   float3 h = cross(ray.direction, edge2);
   float a = dot(edge1, h);
@@ -112,7 +116,7 @@ HitInfo RayTriangle(Ray ray, Triangle tri) {
   }
 
   float f = 1.0f / a;
-  float3 s = ray.origin - tri.posA;
+  float3 s = ray.origin - triangle.posA;
   float u = f * dot(s, h);
   if (u < 0.0f || u > 1.0f) {
     HitInfo miss = {.didHit = false};
@@ -134,7 +138,14 @@ HitInfo RayTriangle(Ray ray, Triangle tri) {
     hit.hitPoint = ray.origin + ray.direction * t;
     // Interpolate vertex normals
     float w = 1.0f - u - v;
-    hit.normal = normalize(tri.normalA * w + tri.normalB * u + tri.normalC * v);
+    hit.normal = normalize(triangle.normalA * w + triangle.normalB * u + triangle.normalC * v);
+    
+    // Check if ray hits the back face - if so, treat as miss
+    if (dot(ray.direction, hit.normal) > 0.0f) {
+      HitInfo miss = {.didHit = false};
+      return miss;
+    }
+    
     return hit;
   }
 
@@ -205,14 +216,15 @@ HitInfo CalculateRayCollisionWithTriangle(Ray ray,
   closestHit.didHit = false;
   for (int meshIdx = 0; meshIdx < meshCount; meshIdx++) {
     MeshInfo info = meshes[meshIdx];
-    if (!RayBoundingBox(ray, info.boundsMin, info.boundsMax)) {
+    if (!RayBoundingBox(ray, info.boundsMin + info.pos, info.boundsMax + info.pos)) {
       continue;
     }
 
     for (int i = 0; i < info.numTriangles; i++) {
       int triIdx = info.firstTriangleIdx + i;
       Triangle tri = triangles[triIdx];
-      HitInfo hit = RayTriangle(ray, tri);
+
+      HitInfo hit = RayTriangle(ray, tri, info.pos);
       if (hit.didHit &&
           (hit.dst < closestHit.dst || closestHit.didHit == false)) {
         closestHit = hit;
@@ -259,12 +271,10 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
              int meshCount, __global const Triangle *triangles) {
   float3 incomingLight = 0;
   float3 rayColor = 1;
-  const uint MaxBounceCount = 1;
+  const uint MaxBounceCount = 10;
   for (uint i = 0; i <= MaxBounceCount; i++) {
     HitInfo hitInfo =
         CalculateRayCollisionWithTriangle(ray, meshes, meshCount, triangles);
-    // HitInfo hitInfo =
-    //     CalculateRayCollisionWithSphere(ray, spheres, sphereCount);
     if (hitInfo.didHit) {
       ray.origin = hitInfo.hitPoint;
       ray.direction = normalize(hitInfo.normal + RandomDirection(rngState));
@@ -275,7 +285,7 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
       incomingLight += emittedLight * rayColor;
       rayColor *= material.color;
     } else {
-      incomingLight += (float3)(.2f, .3f, .6f) * rayColor;
+      // incomingLight += rayColor * (float3)(0.2f, 0.4f, 0.6f);
       break;
     }
   }
@@ -293,7 +303,7 @@ __kernel void raytrace(__global const MeshInfo *meshes,
   float2 uv = (float2)((float)x / (float)width, (float)(1.0f - y / (float)height));
   Ray ray = MakeRay(camInfo, uv);
 
-  const uint IncomingRaysPerPixel = 1;
+  const uint IncomingRaysPerPixel = 3;
   float3 accum = (float3)(0.0f, 0.0f, 0.0f);
   for (uint s = 0; s < IncomingRaysPerPixel; ++s) {
     // use different seed per sample

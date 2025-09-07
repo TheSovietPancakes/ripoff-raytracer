@@ -4,10 +4,29 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using float3 = cl_float3;
+
+std::ostream& operator<<(std::ostream& os, const float3& v) {
+  os << "(" << v.x << ", " << v.y << ", " << v.z << ")";
+  return os;
+}
 using float4 = cl_float4;
+
+// Commented out because float3 is just an alias of float4
+// std::ostream& operator<<(std::ostream& os, const float4& v) {
+//   os << "(" << v.x << ", " << v.y << ", " << v.z << ", " << v.w << ")";
+//   return os;
+// }
+
+typedef struct {
+  float3 boundsMin;
+  float3 boundsMax;
+  size_t firstTriangleIdx;
+  size_t numTriangles;
+} MeshCache;
 
 typedef struct {
   float3 position;
@@ -40,10 +59,11 @@ typedef struct {
 } Triangle;
 
 typedef struct {
-  uint firstTriangleIdx;
-  uint numTriangles;
-  float3 boundsMin;
-  float3 boundsMax;
+  uint firstTriangleIdx = 0;
+  uint numTriangles = 0;
+  float3 boundsMin = {0.0f, 0.0f, 0.0f};
+  float3 boundsMax = {0.0f, 0.0f, 0.0f};
+  float3 pos = {0.0f, 0.0f, 0.0f};
   RayTracingMaterial material;
 } MeshInfo;
 
@@ -55,12 +75,26 @@ typedef struct {
   RayTracingMaterial material;
 } HitInfo;
 
+std::unordered_map<std::string, MeshCache> meshCaches = {};
+std::vector<MeshInfo> meshList = {};
+std::vector<Triangle> triangleList = {};
+
 // An inefficient algorithm to read the contents of a Wavefront OBJ file into a list of triangles.
-void loadOBJFile(const std::string& filename, std::vector<Triangle>& triangles) {
+MeshInfo loadMeshFromOBJFile(const std::string& filename) {
+  if (meshCaches.find(filename) != meshCaches.end()) {
+    size_t idx = meshCaches[filename].firstTriangleIdx;
+    // Return a new mesh with triangle info pointing to the existing triangles
+    return MeshInfo{.firstTriangleIdx = (cl_uint)idx,
+                    .numTriangles = (cl_uint)meshCaches[filename].numTriangles,
+                    .boundsMin = meshCaches[filename].boundsMin, // It is the user's responsibility to add the Mesh's position to this
+                    .boundsMax = meshCaches[filename].boundsMax,
+                    .material = {.color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
+  }
   std::ifstream file(filename);
   if (!file) {
     std::cerr << "Failed to open OBJ file: " << filename << std::endl;
-    std::cerr << "is open: " << file.is_open() << "; bad bit: " << file.bad() << "; fail bit: " << file.fail() << "; eof bit: " << file.eof() << std::endl;
+    std::cerr << "is open: " << file.is_open() << "; bad bit: " << file.bad() << "; fail bit: " << file.fail() << "; eof bit: " << file.eof()
+              << std::endl;
     exit(1);
   }
 
@@ -68,6 +102,7 @@ void loadOBJFile(const std::string& filename, std::vector<Triangle>& triangles) 
   std::vector<cl_float3> temp_normals;
 
   std::string line;
+  int triCount = 0;
   while (std::getline(file, line)) {
     if (line.empty())
       continue;
@@ -84,6 +119,7 @@ void loadOBJFile(const std::string& filename, std::vector<Triangle>& triangles) 
       }
     } else if (line.substr(0, 2) == "f ") { // face
       cl_uint vIdx[3], vtIdx[3], nIdx[3];
+      triCount++;
 
       int matches = sscanf(line.c_str(), "f %d/%d/%d %d/%d/%d %d/%d/%d", &vIdx[0], &vtIdx[0], &nIdx[0], &vIdx[1], &vtIdx[1], &nIdx[1], &vIdx[2],
                            &vtIdx[2], &nIdx[2]);
@@ -120,7 +156,30 @@ void loadOBJFile(const std::string& filename, std::vector<Triangle>& triangles) 
       tri.normalB = temp_normals[nIdx[1]];
       tri.normalC = temp_normals[nIdx[2]];
 
-      triangles.push_back(tri);
+      triangleList.push_back(tri);
     }
   }
+  file.close();
+  size_t firstTriangleIdx = triangleList.size() - (triCount);
+  size_t numTriangles = triCount;
+  MeshCache c = {
+      .firstTriangleIdx = firstTriangleIdx,
+      .numTriangles = numTriangles,
+  };
+  // Calculate bounds
+  for (size_t tri = 0; tri < numTriangles; ++tri) {
+    Triangle& t = triangleList[firstTriangleIdx + tri];
+    c.boundsMin.x = std::min(c.boundsMin.x, std::min(t.posA.x, std::min(t.posB.x, t.posC.x)));
+    c.boundsMin.y = std::min(c.boundsMin.y, std::min(t.posA.y, std::min(t.posB.y, t.posC.y)));
+    c.boundsMin.z = std::min(c.boundsMin.z, std::min(t.posA.z, std::min(t.posB.z, t.posC.z)));
+    c.boundsMax.x = std::max(c.boundsMax.x, std::max(t.posA.x, std::max(t.posB.x, t.posC.x)));
+    c.boundsMax.y = std::max(c.boundsMax.y, std::max(t.posA.y, std::max(t.posB.y, t.posC.y)));
+    c.boundsMax.z = std::max(c.boundsMax.z, std::max(t.posA.z, std::max(t.posB.z, t.posC.z)));
+  }
+  meshCaches[filename] = c;
+  return MeshInfo{.firstTriangleIdx = (cl_uint)firstTriangleIdx,
+                  .numTriangles = (cl_uint)numTriangles,
+                  .boundsMin = c.boundsMin, // It is the user's responsibility to add the Mesh's position to this
+                  .boundsMax = c.boundsMax,
+                  .material = {.color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
 }
