@@ -99,6 +99,7 @@ float3 RandomHemisphereDirection(float3 normal, __private uint *state) {
     dir = -dir;
   return dir;
 }
+
 HitInfo RayTriangle(Ray ray, Triangle tri, float3 offset) {
   const float EPSILON = 1e-6f;
   Triangle triangle = tri;
@@ -271,7 +272,7 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
              int meshCount, __global const Triangle *triangles) {
   float3 incomingLight = 0;
   float3 rayColor = 1;
-  const uint MaxBounceCount = 10;
+  const uint MaxBounceCount = 30;
   for (uint i = 0; i <= MaxBounceCount; i++) {
     HitInfo hitInfo =
         CalculateRayCollisionWithTriangle(ray, meshes, meshCount, triangles);
@@ -303,7 +304,7 @@ __kernel void raytrace(__global const MeshInfo *meshes,
   float2 uv = (float2)((float)x / (float)width, (float)(1.0f - y / (float)height));
   Ray ray = MakeRay(camInfo, uv);
 
-  const uint IncomingRaysPerPixel = 3;
+  const uint IncomingRaysPerPixel = 5;
   float3 accum = (float3)(0.0f, 0.0f, 0.0f);
   for (uint s = 0; s < IncomingRaysPerPixel; ++s) {
     // use different seed per sample

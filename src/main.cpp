@@ -1,14 +1,38 @@
 // VISITORS BEWARE:
-// This latest push, which addedtriangleList, crashed my GPU multiple times on higher resolutions.
-// Save all work before running this program.
+// This program is super inefficient. Don't trust it as a reference for anything.
+// Additionally, this has caused GPU freezes and crashes on my PC many times.
+// As a precaution, please save everything in every program everywhere before you run this.
+///////////////////////////////////////////////////////////////////////////////////////////
+
+// Helps with clearing some warnings.
 #define CL_TARGET_OPENCL_VERSION 300
-#define RENDER_AND_GET_OUT
-#define CAMERA_START_POS                                                                                                                             \
-  { 0.0f, 0.0f, -2.0f }
+
+// Program settings
+
+// The program renders once with the camera at the start position and saves to output.bmp, then exits. No window is opened.
+// #define RENDER_AND_GET_OUT
+// The start position of the camera, if RENDER_AND_GET_OUT is defined.
+#define CAMERA_START_X 0.0f
+#define CAMERA_START_Y 50.0f
+#define CAMERA_START_Z 200.0f
+// On each frame, the pRNG seed is different, and all frames are averaged together to produce a less noisy image.
+// Obviously, the higher this is, the longer yet higher quality the render will be.
+#define FRAME_TOTAL 300
+// Functionally equivalent to FRAME_TOTAL, but when RENDER_AND_GET_OUT is NOT defined,
+// this is how many times pixels are averaged before 1 frame is sent to the window.
+#define RAYS_PER_PIXEL 1
+// The resolution of the output image and size of the window, if a window is created.
+#define WIDTH 500
+#define HEIGHT 500
+// The path, absolute or relative (to the cwd), to the .obj file to load.
+#define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
+
+// imports
 #include <CL/cl.h>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -18,8 +42,9 @@
 
 #include "readobj.hpp"
 
-// glfw
+#ifndef RENDER_AND_GET_OUT
 #include <GLFW/glfw3.h>
+#endif
 
 std::string loadKernelSource(const std::string& filename) {
   std::ifstream file(filename);
@@ -80,16 +105,6 @@ void placeImageDataIntoBMP(const std::vector<unsigned char>& pixels, int width, 
 bool windowIsFocused = true;
 
 int main() {
-  // const int width = 1920;
-  // const int height = 1080;
-  // 720p
-  // const int width = 1280;
-  // const int height = 720;
-  // const int width = 128;
-  // const int height = 128;
-  const int width = 640;
-  const int height = 480;
-
   cl_int err;
 #ifndef RENDER_AND_GET_OUT
   err = glfwInit();
@@ -97,7 +112,7 @@ int main() {
     std::cerr << "Failed to initialize GLFW\n";
     return 1;
   }
-  GLFWwindow* window = glfwCreateWindow(width, height, "GPU Test", nullptr, nullptr);
+  GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "GPU Test", nullptr, nullptr);
   glfwMakeContextCurrent(window);
 #endif
   cl_uint numPlatforms;
@@ -152,7 +167,11 @@ int main() {
     std::cerr << "Failed to create command queue\n";
     return 1;
   }
-  std::string kernelSource = loadKernelSource("/home/sovietpancakes/Desktop/Code/gputest/src/Trace.cl");
+  if (!std::filesystem::exists(OBJECT_PATH)) {
+    std::cerr << "OBJ file does not exist: " << OBJECT_PATH << std::endl;
+    return 1;
+  }
+  std::string kernelSource = loadKernelSource("src/Trace.cl");
   const char* data = kernelSource.data();
   cl_program program = clCreateProgramWithSource(ctx, 1, &data, nullptr, &err);
   if (err != CL_SUCCESS) {
@@ -177,20 +196,21 @@ int main() {
   }
   std::chrono::time_point triangleStart = std::chrono::high_resolution_clock::now();
   std::cout << "Loading triangles from mesh..." << std::flush;
-  MeshInfo mesh = loadMeshFromOBJFile("/home/sovietpancakes/Desktop/Code/gputest/dragon.obj");
+  MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
+  std::cout << "bounding box for mesh: min " << mesh.boundsMin << ", max " << mesh.boundsMax << std::endl;
   // Add a light-emitting triangle underneath the dragon
-  MeshInfo triangleMesh = {.firstTriangleIdx = (cl_int)triangleList.size(),
+  MeshInfo triangleMesh = {.firstTriangleIdx = (cl_uint)triangleList.size(),
                            .numTriangles = 1,
-                           .boundsMin = {-2.0f, -2.0f, -0.9f},
-                           .boundsMax = {2.0f, 2.0f, -0.9f},
-                           .material = {.color = {0.0f, 0.0f, 0.0f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 1.0f}};
+                           .boundsMin = {-10000.0f, 8000.0f, -10000.0f},
+                           .boundsMax = {10000.0f, 12000.0f, 10000.0f},
+                           .material = {.color = {0.0f, 0.0f, 0.0f}, .emissionColor = {1.0f, 0.9f, 0.7f}, .emissionStrength = 1.0f}};
   meshList.push_back(triangleMesh);
-  triangleList.push_back({.posA = {-2.0f, -2.0f, -0.9f},
-                          .posB = {2.0f, -2.0f, -0.9f},
-                          .posC = {0.0f, 2.0f, -0.9f},
-                          .normalA = {0.0f, 0.0f, 1.0f},
-                          .normalB = {0.0f, 0.0f, 1.0f},
-                          .normalC = {0.0f, 0.0f, 1.0f}});
+  triangleList.push_back({.posA = {10000.0f, 10000.0f, -10000.0f},
+                          .posB = {-10000.0f, 10000.0f, -10000.0f},
+                          .posC = {0.0f, 10000.0f, 10000.0f},
+                          .normalA = {0.0f, -1.0f, 0.0f},
+                          .normalB = {0.0f, -1.0f, 0.0f},
+                          .normalC = {0.0f, -1.0f, 0.0f}});
   cl_mem triangleBuffer =
       clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, triangleList.size() * sizeof(Triangle), triangleList.data(), &err);
   if (err != CL_SUCCESS) {
@@ -212,7 +232,7 @@ int main() {
     std::cerr << "Failed to create mesh buffer\n";
     return 1;
   }
-  cl_mem imageBuffer = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY, width * height * sizeof(cl_uchar4), nullptr, &err);
+  cl_mem imageBuffer = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY, WIDTH * HEIGHT * sizeof(cl_uchar4), nullptr, &err);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to create image buffer\n";
     return 1;
@@ -226,7 +246,7 @@ int main() {
   glGenTextures(1, &texture);
 
   // Setup a default viewport and identity matrices for legacy immediate-mode draw
-  glViewport(0, 0, width, height);
+  glViewport(0, 0, WIDTH, HEIGHT);
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
   glMatrixMode(GL_MODELVIEW);
@@ -241,7 +261,7 @@ int main() {
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 #endif
 
-  std::vector<unsigned char> pixels(width * height * 4, 0);
+  std::vector<unsigned char> pixels(WIDTH * HEIGHT * 4, 0);
 
   // args (same order as kernel)
   cl_int meshCount = (cl_int)meshList.size();
@@ -265,6 +285,8 @@ int main() {
     std::cerr << "failed to set kernel arg" << std::endl;
     return 1;
   }
+  const cl_int width = WIDTH; // you must pass a pointer into clSetKernelArg, meaning you have to pass an lvalue
+  const cl_int height = HEIGHT;
   err = clSetKernelArg(kernel, 4, sizeof(cl_int), &width);
   if (err != CL_SUCCESS) {
     std::cerr << "failed to set kernel arg" << std::endl;
@@ -275,8 +297,12 @@ int main() {
     std::cerr << "failed to set kernel arg" << std::endl;
     return 1;
   }
-  CameraInformation camInfo = {
-      .position = CAMERA_START_POS, .pitch = 0.0f, .yaw = 0.0f, .roll = 0.0f, .fov = 90.0f, .aspectRatio = (float)width / (float)height};
+  CameraInformation camInfo = {.position = {CAMERA_START_X, CAMERA_START_Y, CAMERA_START_Z},
+                               .pitch = 0.0f,
+                               .yaw = 0.0f,
+                               .roll = 0.0f,
+                               .fov = 90.0f,
+                               .aspectRatio = (float)WIDTH / (float)HEIGHT};
   err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
   if (err != CL_SUCCESS) {
     std::cerr << "failed to set kernel arg" << std::endl;
@@ -289,9 +315,8 @@ int main() {
     return 1;
   }
 
-  size_t global[2] = {(size_t)width, (size_t)height};
+  size_t global[2] = {(size_t)WIDTH, (size_t)HEIGHT};
 
-  cl_uint targetAvgNum = 8;
   clFinish(queue);
 #ifndef RENDER_AND_GET_OUT
   std::chrono::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
@@ -314,21 +339,27 @@ int main() {
       static std::vector<uint32_t> intBuffer;
       if (intBuffer.size() != pixels.size()) {
         intBuffer.assign(pixels.size(), 0u);
-        numFrames = 0; // no frames accumulated yet
+        numFrames = 1; // no frames accumulated yet
       }
 
-      if (numFrames >= targetAvgNum) {
+      if (numFrames >= FRAME_TOTAL) {
         // finished: output final image
         std::vector<unsigned char> finalImg(pixels.size());
         for (size_t i = 0; i < pixels.size(); ++i) {
           finalImg[i] = static_cast<unsigned char>(std::min<uint32_t>(255u, intBuffer[i] / numFrames));
         }
-        placeImageDataIntoBMP(finalImg, width, height, "output.bmp");
+        std::cout << "\rRendering complete, saving output.bmp" << std::endl;
+        placeImageDataIntoBMP(finalImg, WIDTH, HEIGHT, "output.bmp");
         isRendering = false;
         continue;
       }
 
       // --- Run kernel with a seed derived from numFrames
+      err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        break;
+      }
       err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
       if (err != CL_SUCCESS) {
         std::cerr << "Failed to set kernel arg: " << err << "\n";
@@ -359,7 +390,9 @@ int main() {
         accumBuffer[i] = static_cast<unsigned char>(intBuffer[i] / numFrames);
       }
       glBindTexture(GL_TEXTURE_2D, texture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, accumBuffer.data());
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, accumBuffer.data());
+      numFrames++;
+      std::cout << "\rRendering frame " << numFrames << " of " << FRAME_TOTAL << "..." << std::flush;
     }
 
     std::chrono::time_point nowTime = std::chrono::high_resolution_clock::now();
@@ -367,15 +400,15 @@ int main() {
     unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(deltaTime).count();
     lastRecordedTime = nowTime;
     if (millisecondsPassed > 0)
-      std::cout << "\rcam pos: " << camInfo.position << "; cam rot: (" << camInfo.pitch << ", " << camInfo.yaw << ", " << camInfo.roll
-                << "); fps: " << 1000 / millisecondsPassed << std::flush;
+      std::cout << "\rfps: " << 1000 / millisecondsPassed << std::flush;
     if (!windowIsFocused) {
       std::this_thread::sleep_for(std::chrono::milliseconds(17));
       continue;
     }
     if (!isRendering) {
+      numFrames++; // change the seed even if not rendering
       float deltaSeconds = (float)millisecondsPassed / 1000;
-      const float moveSpeed = 6.0f;
+      const float moveSpeed = 60.0f;
       const float rotSpeed = 6.0f;
       if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
         camInfo.position.x += moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
@@ -417,6 +450,11 @@ int main() {
         std::cerr << "Failed to set kernel arg: " << err << "\n";
         break;
       }
+      err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        break;
+      }
       // Enqueue kernel
       err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
       if (err != CL_SUCCESS) {
@@ -433,7 +471,7 @@ int main() {
 
       // Blocking read: make sure we read the exact number of bytes
       size_t bytesToRead = pixels.size() * sizeof(unsigned char);
-      // Optional: glFinish() to avoid driver-side GL <-> CL race (if using GL interop later)
+      // Optional: glFinish() to avoid driver-side GL <-> CL race (if GL interop later)
       glFinish();
 
       err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, bytesToRead, pixels.data(), 0, nullptr, nullptr);
@@ -444,7 +482,7 @@ int main() {
       // Upload to the bound OpenGL texture (bind to be explicit)
       glBindTexture(GL_TEXTURE_2D, texture);
       // Use GL_RGBA8 internal format explicitly
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     }
 
     // Render quad
@@ -487,12 +525,12 @@ int main() {
   // Cleanup
   glDeleteTextures(1, &texture);
 #else
-  // Render the image. Enqueue the kernel 'targetAvgNum' times and average the results.
+  // Render the image. Enqueue the kernel 'FRAME_TOTAL' times and average the results.
   static std::vector<uint32_t> intBuffer;
   std::chrono::time_point startTime = std::chrono::high_resolution_clock::now();
   intBuffer.reserve(pixels.size());
-  while (numFrames < targetAvgNum) {
-    std::cout << "\rRendering frame " << (numFrames + 1) << " of " << targetAvgNum << "..." << std::flush;
+  while (numFrames < FRAME_TOTAL) {
+    std::cout << "\rRendering frame " << (numFrames + 1) << " of " << FRAME_TOTAL << "..." << std::flush;
     err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
       std::cerr << "Failed to enqueue kernel: " << err << "\n";
@@ -535,10 +573,10 @@ int main() {
   // Average the results (divide)
   std::vector<unsigned char> finalImg(pixels.size());
   for (size_t i = 0; i < pixels.size(); ++i) {
-    finalImg[i] = static_cast<unsigned char>(std::min<uint32_t>(255u, intBuffer[i] / targetAvgNum));
+    finalImg[i] = static_cast<unsigned char>(std::min<uint32_t>(255u, intBuffer[i] / FRAME_TOTAL));
   }
-  placeImageDataIntoBMP(finalImg, width, height, "output.bmp");
-  std::cout << "Wrote output.bmp with " << width << "x" << height << " resolution." << std::endl;
+  placeImageDataIntoBMP(finalImg, WIDTH, HEIGHT, "output.bmp");
+  std::cout << "Wrote output.bmp with " << WIDTH << "x" << HEIGHT << " resolution." << std::endl;
   // We're done!
 #endif
   err = clReleaseMemObject(meshBuffer);
