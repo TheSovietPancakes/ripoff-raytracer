@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
+set(OpenGL_GL_PREFERENCE GLVND) # Prefer opengl 3.0 vs legacy
+
 project(gputest)
 
 # Find OpenCL

@@ -10,22 +10,30 @@
 // Program settings
 
 // The program renders once with the camera at the start position and saves to output.bmp, then exits. No window is opened.
-// #define RENDER_AND_GET_OUT
+// If commented or removed, a window is created and a movable (WASD+QE+arrows) camera is used instead.
+#define RENDER_AND_GET_OUT
 // The start position of the camera, if RENDER_AND_GET_OUT is defined.
 #define CAMERA_START_X 0.0f
-#define CAMERA_START_Y 50.0f
+#define CAMERA_START_Y 100.0f
 #define CAMERA_START_Z 200.0f
-// On each frame, the pRNG seed is different, and all frames are averaged together to produce a less noisy image.
+#define CAMERA_START_PITCH 0.0f
+#define CAMERA_START_YAW 3.14f
+#define CAMERA_START_ROLL 0.0f
+// On each frame, the pRNG's seed is different, and all frames are averaged together to produce a less noisy image.
 // Obviously, the higher this is, the longer yet higher quality the render will be.
-#define FRAME_TOTAL 300
+#define FRAME_TOTAL 1
 // Functionally equivalent to FRAME_TOTAL, but when RENDER_AND_GET_OUT is NOT defined,
 // this is how many times pixels are averaged before 1 frame is sent to the window.
-#define RAYS_PER_PIXEL 1
+// #define RAYS_PER_PIXEL 1 // unimplemented - open Trace.cl
 // The resolution of the output image and size of the window, if a window is created.
-#define WIDTH 500
-#define HEIGHT 500
+// #define WIDTH 360
+// #define HEIGHT 360
+#define WIDTH 1080
+#define HEIGHT 1080
 // The path, absolute or relative (to the cwd), to the .obj file to load.
 #define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
+// How much space there is inside the Cornell box between the model and the walls
+#define CORNELL_BREATHING_ROOM 60.0f
 
 // imports
 #include <CL/cl.h>
@@ -49,6 +57,7 @@
 std::string loadKernelSource(const std::string& filename) {
   std::ifstream file(filename);
   if (!file.is_open()) {
+    std::cout << "File not found or not opened: " << filename << std::endl;
     exit(1);
   }
   return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -178,7 +187,8 @@ int main() {
     std::cerr << "Failed to create program\n";
     return 1;
   }
-  err = clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr);
+  const char* buildOptions = "-cl-fast-relaxed-math -cl-mad-enable"; // Fast math yay
+  err = clBuildProgram(program, 1, &device, buildOptions, nullptr, nullptr);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to build program\n";
     size_t logSize;
@@ -197,20 +207,57 @@ int main() {
   std::chrono::time_point triangleStart = std::chrono::high_resolution_clock::now();
   std::cout << "Loading triangles from mesh..." << std::flush;
   MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
-  std::cout << "bounding box for mesh: min " << mesh.boundsMin << ", max " << mesh.boundsMax << std::endl;
+  mesh.material = {
+      .type = MaterialType_Solid, .color = {0.8f, 0.8f, 0.8f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f, .reflectiveness = 1.0f};
+  // mesh.material = {.color = {0.8f, 0.8f, 0.8f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 10.0f};
+  mesh.yaw = 0.5f;
+  mesh.scale = 0.5f;
+  // Recalculate the bounding box of the mesh based on its scale and rotation
+  recalculateMeshBounds(mesh);
   // Add a light-emitting triangle underneath the dragon
-  MeshInfo triangleMesh = {.firstTriangleIdx = (cl_uint)triangleList.size(),
-                           .numTriangles = 1,
-                           .boundsMin = {-10000.0f, 8000.0f, -10000.0f},
-                           .boundsMax = {10000.0f, 12000.0f, 10000.0f},
-                           .material = {.color = {0.0f, 0.0f, 0.0f}, .emissionColor = {1.0f, 0.9f, 0.7f}, .emissionStrength = 1.0f}};
-  meshList.push_back(triangleMesh);
-  triangleList.push_back({.posA = {10000.0f, 10000.0f, -10000.0f},
-                          .posB = {-10000.0f, 10000.0f, -10000.0f},
-                          .posC = {0.0f, 10000.0f, 10000.0f},
-                          .normalA = {0.0f, -1.0f, 0.0f},
-                          .normalB = {0.0f, -1.0f, 0.0f},
-                          .normalC = {0.0f, -1.0f, 0.0f}});
+  auto addQuad = [&](cl_float3 a, cl_float3 b, cl_float3 c, cl_float3 d, cl_float3 normal, cl_float3 color) {
+    MeshInfo quadMesh = {
+        .firstTriangleIdx = (cl_uint)triangleList.size(),
+        .numTriangles = 2,
+        .boundsMin = {fminf(fminf(a.x, b.x), fminf(c.x, d.x)), fminf(fminf(a.y, b.y), fminf(c.y, d.y)), fminf(fminf(a.z, b.z), fminf(c.z, d.z))},
+        .boundsMax = {fmaxf(fmaxf(a.x, b.x), fmaxf(c.x, d.x)), fmaxf(fmaxf(a.y, b.y), fmaxf(c.y, d.y)), fmaxf(fmaxf(a.z, b.z), fmaxf(c.z, d.z))},
+        .material = {.type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 1.0f}};
+
+    // two triangles
+    triangleList.push_back({a, b, c, normal, normal, normal});
+    triangleList.push_back({a, c, d, normal, normal, normal});
+    meshList.push_back(quadMesh);
+  };
+
+  float minX = mesh.boundsMin.x - CORNELL_BREATHING_ROOM, maxX = mesh.boundsMax.x + CORNELL_BREATHING_ROOM;
+  float minY = mesh.boundsMin.y, maxY = mesh.boundsMax.y + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
+  float minZ = mesh.boundsMin.z - CORNELL_BREATHING_ROOM, maxZ = mesh.boundsMax.z + CORNELL_BREATHING_ROOM;
+
+  // Floor (Y = minY)
+  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, {0, 1, 0}, {0.0f, 0.8f, 0.0f});
+  meshList.back().material = {MaterialType_Checker, {0.1, 0.1, 0.1}, {0.8, 0.8, 0.8}, 40.0f, 1.0f};
+
+  // Ceiling (Y = maxY)
+  addQuad({minX, maxY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, {0, -1, 0}, {0.8f, 0.8f, 0.8f});
+
+  // Back wall (Z = maxZ)
+  addQuad({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, {0, 0, -1}, {0.8f, 0.8f, 0.8f});
+
+  // Front wall (Z = minZ)
+  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {0.8, 0.8, 0.8});
+  meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
+
+  // Left wall (X = minX)
+  addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.4});
+
+  // Right wall (X = maxX)
+  addQuad({maxX, minY, minZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {-1, 0, 0}, {0.4f, 0.2f, 0.2});
+
+  // Light quad on ceiling
+  float lx = 50, lz = 50, ly = maxY - 1; // just below ceiling
+  addQuad({-lx, ly, -lz}, {lx, ly, -lz}, {lx, ly, lz}, {-lx, ly, lz}, {0, -1, 0}, {0.0f, 0.0f, 0.0f});
+  meshList.back().material = {MaterialType_Solid, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, 10.0f, 0.0f};
+
   cl_mem triangleBuffer =
       clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, triangleList.size() * sizeof(Triangle), triangleList.data(), &err);
   if (err != CL_SUCCESS) {
@@ -221,8 +268,6 @@ int main() {
   std::cout << " done in " << std::chrono::duration_cast<std::chrono::milliseconds>(triangleEndTime - triangleStart).count() << " ms ("
             << triangleList.size() << ").";
   std::cout << "\nLoading mesh info..." << std::flush;
-  mesh.material.color = {1.0f, 0.5f, 0.5f};
-  // mesh.material = {.color = {0.8f, 0.8f, 0.8f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 10.0f};
   meshList.push_back(mesh);
   std::chrono::time_point meshEndTime = std::chrono::high_resolution_clock::now();
   std::cout << " done in " << std::chrono::duration_cast<std::chrono::milliseconds>(meshEndTime - triangleEndTime).count() << " ms ("
@@ -298,9 +343,9 @@ int main() {
     return 1;
   }
   CameraInformation camInfo = {.position = {CAMERA_START_X, CAMERA_START_Y, CAMERA_START_Z},
-                               .pitch = 0.0f,
-                               .yaw = 0.0f,
-                               .roll = 0.0f,
+                               .pitch = CAMERA_START_PITCH,
+                               .yaw = CAMERA_START_YAW,
+                               .roll = CAMERA_START_ROLL,
                                .fov = 90.0f,
                                .aspectRatio = (float)WIDTH / (float)HEIGHT};
   err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
@@ -400,16 +445,18 @@ int main() {
     unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(deltaTime).count();
     lastRecordedTime = nowTime;
     if (millisecondsPassed > 0)
-      std::cout << "\rfps: " << 1000 / millisecondsPassed << std::flush;
+      // add spaces to overwrite previous numbers, if they were printed there
+      std::cout << "\rfps: " << 1000 / millisecondsPassed << "   " << std::flush;
     if (!windowIsFocused) {
       std::this_thread::sleep_for(std::chrono::milliseconds(17));
       continue;
     }
     if (!isRendering) {
       numFrames++; // change the seed even if not rendering
-      float deltaSeconds = (float)millisecondsPassed / 1000;
+      float deltaSeconds = (float)millisecondsPassed / 1000.0f;
       const float moveSpeed = 60.0f;
-      const float rotSpeed = 6.0f;
+      const float rotSpeed = 1.5f; // Reduced from 6.0f for more reasonable rotation speed
+
       if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
         camInfo.position.x += moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
         camInfo.position.z += moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;

@@ -35,10 +35,18 @@ typedef struct {
   float aspectRatio;
 } CameraInformation;
 
+typedef enum {
+  MaterialType_Solid = 0,
+  MaterialType_Checker = 1,
+  MaterialType_Invisible = 2
+} MaterialType;
+
 typedef struct {
+  MaterialType type;
   float3 color;
   float3 emissionColor;
   float emissionStrength;
+  float reflectiveness;
 } RayTracingMaterial;
 
 typedef struct {
@@ -64,6 +72,8 @@ typedef struct {
   float3 boundsMin = {0.0f, 0.0f, 0.0f};
   float3 boundsMax = {0.0f, 0.0f, 0.0f};
   float3 pos = {0.0f, 0.0f, 0.0f};
+  float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
+  float scale = 1.0f;
   RayTracingMaterial material;
 } MeshInfo;
 
@@ -181,5 +191,69 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
                   .numTriangles = (cl_uint)numTriangles,
                   .boundsMin = c.boundsMin, // It is the user's responsibility to add the Mesh's position to this
                   .boundsMax = c.boundsMax,
-                  .material = {.color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
+                  .pitch = 0.0f,
+                  .yaw = 0.0f,
+                  .roll = 0.0f,
+                  .scale = 1.0f,
+                  .material = {.type = MaterialType_Solid,.color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
+}
+
+void recalculateMeshBounds(MeshInfo& mesh) {
+  // Reset bounds
+  mesh.boundsMin = {CL_FLT_MAX, CL_FLT_MAX, CL_FLT_MAX};
+  mesh.boundsMax = {-CL_FLT_MAX, -CL_FLT_MAX, -CL_FLT_MAX};
+
+  // Precompute sine and cosine of rotation angles
+  float cosYaw = cos(mesh.yaw);
+  float sinYaw = sin(mesh.yaw);
+  float cosPitch = cos(mesh.pitch);
+  float sinPitch = sin(mesh.pitch);
+  float cosRoll = cos(mesh.roll);
+  float sinRoll = sin(mesh.roll);
+
+  for (size_t tri = 0; tri < mesh.numTriangles; ++tri) {
+    Triangle& t = triangleList[mesh.firstTriangleIdx + tri];
+    cl_float3 vertices[3] = {t.posA, t.posB, t.posC};
+
+    for (int i = 0; i < 3; ++i) {
+      cl_float3 v = vertices[i];
+
+      // Apply scaling
+      v.x *= mesh.scale;
+      v.y *= mesh.scale;
+      v.z *= mesh.scale;
+
+      // Apply rotation (Yaw-Pitch-Roll)
+      // Yaw (around Y axis)
+      float x1 = v.x * cosYaw - v.z * sinYaw;
+      float z1 = v.x * sinYaw + v.z * cosYaw;
+      v.x = x1;
+      v.z = z1;
+
+      // Pitch (around X axis)
+      float y2 = v.y * cosPitch - v.z * sinPitch;
+      float z2 = v.y * sinPitch + v.z * cosPitch;
+      v.y = y2;
+      v.z = z2;
+
+      // Roll (around Z axis)
+      float x3 = v.x * cosRoll - v.y * sinRoll;
+      float y3 = v.x * sinRoll + v.y * cosRoll;
+      v.x = x3;
+      v.y = y3;
+
+      // Apply translation
+      v.x += mesh.pos.x;
+      v.y += mesh.pos.y;
+      v.z += mesh.pos.z;
+
+      // Update bounds
+      mesh.boundsMin.x = std::min(mesh.boundsMin.x, v.x);
+      mesh.boundsMin.y = std::min(mesh.boundsMin.y, v.y);
+      mesh.boundsMin.z = std::min(mesh.boundsMin.z, v.z);
+      mesh.boundsMax.x = std::max(mesh.boundsMax.x, v.x);
+      mesh.boundsMax.y = std::max(mesh.boundsMax.y, v.y);
+      mesh.boundsMax.z = std::max(mesh.boundsMax.z, v.z);
+    }
+  }
 }
