@@ -2,6 +2,7 @@
 // This program is super inefficient. Don't trust it as a reference for anything.
 // Additionally, this has caused GPU freezes and crashes on my PC many times.
 // As a precaution, please save everything in every program everywhere before you run this.
+// For your own computer's safety, this program is totally OK to interrupt with ^C.
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 // Helps with clearing some warnings.
@@ -12,6 +13,10 @@
 // The program renders once with the camera at the start position and saves to output.bmp, then exits. No window is opened.
 // If commented or removed, a window is created and a movable (WASD+QE+arrows) camera is used instead.
 #define RENDER_AND_GET_OUT
+// Give the GPU a break (~250ms) between frames to avoid crashing.
+// Additionally, every 10 frames, a preview.bmp image is outputted to show current render progress.
+// (since it's better to find out you mesed up after 10 frames rather than after 1,000.)
+#define RELAX_GPU
 // The start position of the camera, if RENDER_AND_GET_OUT is defined.
 #define CAMERA_START_X 0.0f
 #define CAMERA_START_Y 100.0f
@@ -21,13 +26,11 @@
 #define CAMERA_START_ROLL 0.0f
 // On each frame, the pRNG's seed is different, and all frames are averaged together to produce a less noisy image.
 // Obviously, the higher this is, the longer yet higher quality the render will be.
-#define FRAME_TOTAL 10
+#define FRAME_TOTAL 50
 // Functionally equivalent to FRAME_TOTAL, but when RENDER_AND_GET_OUT is NOT defined,
 // this is how many times pixels are averaged before 1 frame is sent to the window.
 // #define RAYS_PER_PIXEL 1 // unimplemented - open Trace.cl
 // The resolution of the output image and size of the window, if a window is created.
-// #define WIDTH 360
-// #define HEIGHT 360
 #define WIDTH 1920
 #define HEIGHT 1080
 // The path, absolute or relative (to the cwd), to the .obj file to load.
@@ -35,24 +38,12 @@
 // How much space there is inside the Cornell box between the model and the walls
 #define CORNELL_BREATHING_ROOM 200.0f
 
-// imports
-#include <CL/cl.h>
-#include <array>
-#include <chrono>
-#include <cmath>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <limits>
-#include <string>
-#include <thread>
-#include <vector>
-
 #include "readobj.hpp"
 
 #ifndef RENDER_AND_GET_OUT
 #include <GLFW/glfw3.h>
 #endif
+#include <numeric>
 
 std::string loadKernelSource(const std::string& filename) {
   std::ifstream file(filename);
@@ -204,11 +195,13 @@ int main() {
     std::cerr << "Failed to create kernel\n";
     return 1;
   }
-  std::chrono::time_point triangleStart = std::chrono::high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point triangleStart = std::chrono::high_resolution_clock::now();
   std::cout << "Loading triangles from mesh..." << std::flush;
   MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
   mesh.material = {
-      .type = MaterialType_Solid, .color = {0.8f, 0.8f, 0.8f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f, .reflectiveness = 1.0f};
+      .type = MaterialType_Solid, .color = {0.8f, 0.8f, 0.8f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f, .reflectiveness = 1.0f,
+      //  .specularProbability = 0.0f,
+  };
   // mesh.material = {.color = {0.8f, 0.8f, 0.8f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 10.0f};
   mesh.yaw = 0.5f;
   mesh.scale = 0.5f;
@@ -221,7 +214,10 @@ int main() {
         .numTriangles = 2,
         .boundsMin = {fminf(fminf(a.x, b.x), fminf(c.x, d.x)), fminf(fminf(a.y, b.y), fminf(c.y, d.y)), fminf(fminf(a.z, b.z), fminf(c.z, d.z))},
         .boundsMax = {fmaxf(fmaxf(a.x, b.x), fmaxf(c.x, d.x)), fmaxf(fmaxf(a.y, b.y), fmaxf(c.y, d.y)), fmaxf(fmaxf(a.z, b.z), fmaxf(c.z, d.z))},
-        .material = {.type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 1.0f}};
+        .material = {
+            .type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 1.0f,
+            // .specularProbability = 0.0f,
+        }};
 
     // two triangles
     triangleList.push_back({a, b, c, normal, normal, normal});
@@ -235,7 +231,10 @@ int main() {
 
   // Floor (Y = minY)
   addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, {0, 1, 0}, {0.0f, 0.8f, 0.0f});
-  meshList.back().material = {MaterialType_Checker, {0.1, 0.1, 0.1}, {0.8, 0.8, 0.8}, 40.0f, 1.0f};
+  meshList.back().material = {
+      .type = MaterialType_Checker, .color = {0.1, 0.1, 0.1}, .emissionColor = {0.8, 0.8, 0.8}, .emissionStrength = 40.0f, .reflectiveness = 1.0f,
+      // .specularProbability = 0.0f,
+  };
 
   // Ceiling (Y = maxY)
   addQuad({minX, maxY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, {0, -1, 0}, {0.8f, 0.8f, 0.8f});
@@ -264,12 +263,12 @@ int main() {
     std::cerr << "Failed to create triangle buffer\n";
     return 1;
   }
-  std::chrono::time_point triangleEndTime = std::chrono::high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point triangleEndTime = std::chrono::high_resolution_clock::now();
   std::cout << " done in " << std::chrono::duration_cast<std::chrono::milliseconds>(triangleEndTime - triangleStart).count() << " ms ("
             << triangleList.size() << ").";
   std::cout << "\nLoading mesh info..." << std::flush;
   meshList.push_back(mesh);
-  std::chrono::time_point meshEndTime = std::chrono::high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point meshEndTime = std::chrono::high_resolution_clock::now();
   std::cout << " done in " << std::chrono::duration_cast<std::chrono::milliseconds>(meshEndTime - triangleEndTime).count() << " ms ("
             << meshList.size() << ")." << std::endl;
   cl_mem meshBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, meshList.size() * sizeof(MeshInfo), meshList.data(), &err);
@@ -360,11 +359,9 @@ int main() {
     return 1;
   }
 
-  size_t global[2] = {(size_t)WIDTH, (size_t)HEIGHT};
-
   clFinish(queue);
 #ifndef RENDER_AND_GET_OUT
-  std::chrono::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
   glfwSetWindowFocusCallback(window, [](GLFWwindow* win, int focused) { windowIsFocused = focused != 0; });
   bool isRendering = false;
   while (!glfwWindowShouldClose(window)) {
@@ -440,7 +437,7 @@ int main() {
       std::cout << "\rRendering frame " << numFrames << " of " << FRAME_TOTAL << "..." << std::flush;
     }
 
-    std::chrono::time_point nowTime = std::chrono::high_resolution_clock::now();
+    std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration deltaTime = nowTime - lastRecordedTime;
     unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(deltaTime).count();
     lastRecordedTime = nowTime;
@@ -574,49 +571,82 @@ int main() {
 #else
   // Render the image. Enqueue the kernel 'FRAME_TOTAL' times and average the results.
   static std::vector<uint32_t> intBuffer;
-  std::chrono::time_point startTime = std::chrono::high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point startTime = std::chrono::high_resolution_clock::now();
   intBuffer.reserve(pixels.size());
+  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), 128);
+  size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
+  size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
+  size_t totalTiles = totalTilesX * totalTilesY;
+
   while (numFrames < FRAME_TOTAL) {
-    std::cout << "\rRendering frame " << (numFrames + 1) << " of " << FRAME_TOTAL << "..." << std::flush;
-    err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to enqueue kernel: " << err << "\n";
-      return 1;
-    }
-    err = clFinish(queue); // safer than flush when reading back
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to finish command queue: " << err << "\n";
-      return 1;
+    size_t tileIndex = 0;
+    for (size_t x = 0; x < WIDTH; x += tileSize) {
+      for (size_t y = 0; y < HEIGHT; y += tileSize) {
+        int w = std::min(tileSize, WIDTH - x);
+        int h = std::min(tileSize, HEIGHT - y);
+
+        size_t globalSize[2] = {(size_t)w, (size_t)h};
+        size_t globalOffset[2] = {(size_t)x, (size_t)y};
+
+        float percentDone = ((float)numFrames / FRAME_TOTAL) + ((float)tileIndex / (totalTiles * FRAME_TOTAL));
+        std::cout << "\rRendering frame " << (numFrames + 1) << " of " << FRAME_TOTAL << " (" << std::fixed << std::setprecision(2)
+                  << (percentDone * 100.0f) << "%) ..." << std::flush;
+        err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
+        if (err != CL_SUCCESS) {
+          std::cerr << "Failed to set kernel arg: " << err << "\n";
+          return 1;
+        }
+        err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
+        if (err != CL_SUCCESS) {
+          std::cerr << "Failed to set kernel arg: " << err << "\n";
+          return 1;
+        }
+        err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);
+        if (err != CL_SUCCESS) {
+          std::cerr << "Failed to enqueue kernel: " << err << "\n";
+          return 1;
+        }
+        tileIndex++;
+        err = clFinish(queue); // safer than flush when reading back
+        if (err != CL_SUCCESS) {
+          std::cerr << "Failed to finish command queue: " << err << "\n";
+          return 1;
+        }
+      }
     }
     err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
       std::cerr << "Failed to read buffer: " << err << "\n";
       return 1;
     }
-    if (intBuffer.size() != pixels.size()) {
-      intBuffer.assign(pixels.size(), 0u);
-    }
+
     for (size_t i = 0; i < pixels.size(); ++i) {
       intBuffer[i] += pixels[i];
     }
-    // Set the parameter for the frame number
-    err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to set frame num: " << err << "\n";
-      return 1;
-    }
-    err = clFinish(queue);
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to finish command queue: " << err << "\n";
-      return 1;
-    }
     numFrames++;
+
+#ifdef RELAX_GPU
+    if (numFrames == FRAME_TOTAL - 1)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    if (FRAME_TOTAL > 10 && numFrames % 10 == 0 && numFrames < FRAME_TOTAL) {
+      // Every 10 frames, output a quick preview to the screen
+      std::cout << "\nWriting preview file..." << std::flush;
+      std::vector<unsigned char> accumBuffer(pixels.size());
+      for (size_t i = 0; i < pixels.size(); ++i) {
+        accumBuffer[i] = static_cast<unsigned char>(intBuffer[i] / numFrames);
+      }
+      placeImageDataIntoBMP(accumBuffer, WIDTH, HEIGHT, "preview.bmp");
+      std::cout << " done (" << numFrames / 10 << "/" << (FRAME_TOTAL / 10) << ")" << std::flush;
+    }
+#endif
   }
-  std::chrono::time_point endTime = std::chrono::high_resolution_clock::now();
-  std::chrono::duration deltaTime = endTime - startTime;
+  std::chrono::high_resolution_clock::time_point endTime = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<float> deltaTime = endTime - startTime;
   unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(deltaTime).count();
   if (millisecondsPassed > 0)
-    std::cout << " done in " << (millisecondsPassed / 1000.0) << " seconds" << std::endl;
+    std::cout << "\rRendering frame " << FRAME_TOTAL << " of " << FRAME_TOTAL << " (100.00%) ... done in " << (millisecondsPassed / 1000.0)
+              << " seconds" << std::endl;
   // Average the results (divide)
   std::vector<unsigned char> finalImg(pixels.size());
   for (size_t i = 0; i < pixels.size(); ++i) {
@@ -624,7 +654,7 @@ int main() {
   }
   placeImageDataIntoBMP(finalImg, WIDTH, HEIGHT, "output.bmp");
   std::cout << "Wrote output.bmp with " << WIDTH << "x" << HEIGHT << " resolution." << std::endl;
-  // We're done!
+// We're done!
 #endif
   err = clReleaseMemObject(meshBuffer);
   if (err != CL_SUCCESS) {

@@ -1,9 +1,15 @@
 #pragma once
 
-#include <CL/cl.h>
+#include "CL/cl.h"
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -22,48 +28,38 @@ using float4 = cl_float4;
 // }
 
 typedef struct {
-  float3 boundsMin;
-  float3 boundsMax;
-  size_t firstTriangleIdx;
-  size_t numTriangles;
+  float3 boundsMin = {0.0f, 0.0f, 0.0f};
+  float3 boundsMax = {0.0f, 0.0f, 0.0f};
+  size_t firstTriangleIdx = 0;
+  size_t numTriangles = 0;
 } MeshCache;
 
 typedef struct {
-  float3 position;
-  float pitch, yaw, roll;
-  float fov;
-  float aspectRatio;
+  float3 position = {0.0f, 0.0f, 0.0f};
+  float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
+  float fov = 45.0f;
+  float aspectRatio = 16.0f / 9.0f;
 } CameraInformation;
 
-typedef enum {
-  MaterialType_Solid = 0,
-  MaterialType_Checker = 1,
-  MaterialType_Invisible = 2
-} MaterialType;
+typedef enum { MaterialType_Solid = 0, MaterialType_Checker = 1, MaterialType_Invisible = 2 } MaterialType;
 
 typedef struct {
-  MaterialType type;
-  float3 color;
-  float3 emissionColor;
-  float emissionStrength;
-  float reflectiveness;
+  MaterialType type = MaterialType_Solid;
+  float3 color = {1.0f, 1.0f, 1.0f};
+  float3 emissionColor = {0.0f, 0.0f, 0.0f};
+  float emissionStrength = 0.0f;
+  float reflectiveness = 0.0f;
+  // float specularProbability = 0.0f;
 } RayTracingMaterial;
 
 typedef struct {
-  float3 center;
-  float radius;
-  RayTracingMaterial material;
-} Sphere;
-
-typedef struct {
-  float3 origin;
-  float3 direction;
-} Ray;
-
-typedef struct {
-  float3 posA, posB, posC;
+  float3 posA = {0.0f, 0.0f, 0.0f};
+  float3 posB = {0.0f, 0.0f, 0.0f};
+  float3 posC = {0.0f, 0.0f, 0.0f};
   // normal
-  float3 normalA, normalB, normalC;
+  float3 normalA = {0.0f, 0.0f, 0.0f};
+  float3 normalB = {0.0f, 0.0f, 0.0f};
+  float3 normalC = {0.0f, 0.0f, 0.0f};
 } Triangle;
 
 typedef struct {
@@ -76,14 +72,6 @@ typedef struct {
   float scale = 1.0f;
   RayTracingMaterial material;
 } MeshInfo;
-
-typedef struct {
-  bool didHit;
-  float dst;
-  float3 hitPoint;
-  float3 normal;
-  RayTracingMaterial material;
-} HitInfo;
 
 std::unordered_map<std::string, MeshCache> meshCaches = {};
 std::vector<MeshInfo> meshList = {};
@@ -195,7 +183,14 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
                   .yaw = 0.0f,
                   .roll = 0.0f,
                   .scale = 1.0f,
-                  .material = {.type = MaterialType_Solid,.color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
+                  .material = {
+                      .type = MaterialType_Solid,
+                      .color = {1.0f, 1.0f, 1.0f},
+                      .emissionColor = {0.0f, 0.0f, 0.0f},
+                      .emissionStrength = 0.0f,
+                      .reflectiveness = 0.0f,
+                      // .specularProbability = 0.0f,
+                  }};
 }
 
 void recalculateMeshBounds(MeshInfo& mesh) {

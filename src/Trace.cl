@@ -1,6 +1,6 @@
 // Render quality
-__constant uint IncomingRaysPerPixel = 200;
-__constant uint MaxBounceCount = 50;
+__constant uint IncomingRaysPerPixel = 400;
+__constant uint MaxBounceCount = 150;
 
 // Math
 __constant float tau = 6.28318530717958647692f; // 2pi
@@ -25,6 +25,7 @@ typedef struct {
   float3 emissionColor;
   float emissionStrength;
   float reflectiveness; // 0-1
+  // float specularProbability; // 0-1
 } RayTracingMaterial;
 
 typedef struct {
@@ -386,16 +387,16 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
 
     float3 diffuseDirection = SampleHemisphereCosine(hit.normal, rngState);
     float3 specularDirection = reflect(ray.direction, hit.normal);
-    ray.direction = lerp3(diffuseDirection, specularDirection,
-                        hit.material.reflectiveness);
+    ray.direction =
+        lerp3(diffuseDirection, specularDirection, hit.material.reflectiveness);
 
     // accumulate emission
     incomingLight += throughput * (hit.material.emissionColor *
                                    hit.material.emissionStrength);
 
     // pick next direction cosine-weighted
-    ray.origin =
-        hit.hitPoint + ray.direction * EPSILON; // offset to avoid self-intersection
+    ray.origin = hit.hitPoint +
+                 ray.direction * EPSILON; // offset to avoid self-intersection
     // multiply throughput by surface color
     throughput *= hit.material.color;
     // Russian roulette (optional) - simple energy termination to save work
