@@ -15,25 +15,25 @@
 // The start position of the camera, if RENDER_AND_GET_OUT is defined.
 #define CAMERA_START_X 0.0f
 #define CAMERA_START_Y 100.0f
-#define CAMERA_START_Z 200.0f
+#define CAMERA_START_Z 300.0f
 #define CAMERA_START_PITCH 0.0f
 #define CAMERA_START_YAW 3.14f
 #define CAMERA_START_ROLL 0.0f
 // On each frame, the pRNG's seed is different, and all frames are averaged together to produce a less noisy image.
 // Obviously, the higher this is, the longer yet higher quality the render will be.
-#define FRAME_TOTAL 1
+#define FRAME_TOTAL 10
 // Functionally equivalent to FRAME_TOTAL, but when RENDER_AND_GET_OUT is NOT defined,
 // this is how many times pixels are averaged before 1 frame is sent to the window.
 // #define RAYS_PER_PIXEL 1 // unimplemented - open Trace.cl
 // The resolution of the output image and size of the window, if a window is created.
 // #define WIDTH 360
 // #define HEIGHT 360
-#define WIDTH 1080
+#define WIDTH 1920
 #define HEIGHT 1080
 // The path, absolute or relative (to the cwd), to the .obj file to load.
 #define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
 // How much space there is inside the Cornell box between the model and the walls
-#define CORNELL_BREATHING_ROOM 60.0f
+#define CORNELL_BREATHING_ROOM 200.0f
 
 // imports
 #include <CL/cl.h>

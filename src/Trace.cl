@@ -1,5 +1,5 @@
 // Render quality
-__constant uint IncomingRaysPerPixel = 100;
+__constant uint IncomingRaysPerPixel = 200;
 __constant uint MaxBounceCount = 50;
 
 // Math
