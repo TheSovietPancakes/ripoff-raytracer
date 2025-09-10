@@ -26,7 +26,7 @@
 #define CAMERA_START_ROLL 0.0f
 // On each frame, the pRNG's seed is different, and all frames are averaged together to produce a less noisy image.
 // Obviously, the higher this is, the longer yet higher quality the render will be.
-#define FRAME_TOTAL 1
+#define FRAME_TOTAL 10
 // Functionally equivalent to FRAME_TOTAL, but when RENDER_AND_GET_OUT is NOT defined,
 // this is how many times pixels are averaged before 1 frame is sent to the window.
 // #define RAYS_PER_PIXEL 1 // unimplemented - open Trace.cl
@@ -34,10 +34,13 @@
 // #define WIDTH 1080
 // #define HEIGHT 1920
 // These are the dimensions of an iPhone 16, the phone that I have lol
-#define WIDTH 1179
-#define HEIGHT 2556
+// #define WIDTH 1179
+// #define HEIGHT 2556
+
+#define WIDTH 500
+#define HEIGHT 500
 // The path, absolute or relative (to the cwd), to the .obj file to load.
-#define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
+#define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/dragon.obj"
 // How much space there is inside the Cornell box between the model and the walls
 #define CORNELL_BREATHING_ROOM 200.0f
 
@@ -202,12 +205,15 @@ int main() {
   std::cout << "Loading triangles from mesh..." << std::flush;
   MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
   mesh.material = {
-      .type = MaterialType_Solid, .color = {0.8f, 0.8f, 0.8f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f, .reflectiveness = 1.0f,
+      .type = MaterialType_Solid, .color = {0.8f, 0.8f, 0.8f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f, .reflectiveness = 0.0f,
       //  .specularProbability = 0.0f,
   };
+  mesh.pos.y += 80.0f;
+  mesh.scale = 200.0f;
+  mesh.yaw = 1.5f;
   // mesh.material = {.color = {0.8f, 0.8f, 0.8f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 10.0f};
-  mesh.yaw = 0.5f;
-  mesh.scale = 0.5f;
+  // mesh.yaw = 0.5f;
+  // mesh.scale = 0.5f;
 
   // Add a light-emitting triangle underneath the dragon
   auto addQuad = [&](cl_float3 a, cl_float3 b, cl_float3 c, cl_float3 d, cl_float3 normal, cl_float3 color) {
@@ -226,7 +232,7 @@ int main() {
     SplitBVH(nodeList.back());
     MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
                          .material = {
-                             .type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 1.0f,
+                             .type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 0.0f,
                              // .specularProbability = 0.0f,
                          }};
 
@@ -256,7 +262,7 @@ int main() {
 
   // Front wall (Z = minZ)
   addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {0.8, 0.8, 0.8});
-  meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
+  // meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
 
   // Left wall (X = minX)
   addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.4});
@@ -293,7 +299,19 @@ int main() {
     std::cerr << "Failed to create image buffer\n";
     return 1;
   }
-  cl_mem nodeBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, nodeList.size() * sizeof(Node), nodeList.data(), &err);
+  std::vector<GPUNode> gpuNodes;
+  gpuNodes.resize(nodeList.size());
+  for (size_t i = 0; i < nodeList.size(); ++i) {
+    GPUNode n = {
+      .bounds = nodeList[i].bounds,
+      .index = nodeList[i].childIndex == 0 ? nodeList[i].firstTriangleIdx : nodeList[i].childIndex,
+      .numTriangles = nodeList[i].childIndex == 0 ? nodeList[i].numTriangles : 0,
+    };
+    gpuNodes[i] = n;
+  }
+  std::cout << "memory gained: " << (sizeof(Node) * nodeList.size() - sizeof(GPUNode) * gpuNodes.size()) / 1024 << " KB\n";
+
+  cl_mem nodeBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, gpuNodes.size() * sizeof(GPUNode), gpuNodes.data(), &err);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to create node buffer\n";
     return 1;
@@ -386,6 +404,7 @@ int main() {
   std::chrono::high_resolution_clock::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
   glfwSetWindowFocusCallback(window, [](GLFWwindow* win, int focused) { windowIsFocused = focused != 0; });
   bool isRendering = false;
+  size_t global[2] = {WIDTH, HEIGHT};
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
     // Camera movement

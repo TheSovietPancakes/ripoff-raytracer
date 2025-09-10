@@ -44,6 +44,12 @@ typedef struct {
 } Node;
 
 typedef struct {
+  BoundingBox bounds;
+  cl_ulong index = 0; // If this is a leaf node, then its the FIRST_TRI_INDEX. otherwise it is CHILD_INDEX.
+  cl_ulong numTriangles = 0;
+} GPUNode;
+
+typedef struct {
   float3 position;
   float pitch, yaw, roll;
   float fov;
@@ -219,6 +225,7 @@ void SplitBVH(Node& parent, int depth = 10) {
 
   Node childB = {.childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx + leftCount, .numTriangles = parent.numTriangles - leftCount};
 
+  parent.numTriangles = 0; // now an internal node
   // Calculate bounding boxes for children
   for (size_t i = 0; i < childA.numTriangles; ++i) {
     GrowToInclude(childA.bounds, triangleList[childA.firstTriangleIdx + i]);

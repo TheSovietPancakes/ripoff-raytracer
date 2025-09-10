@@ -1,6 +1,6 @@
 // Render quality
-__constant uint IncomingRaysPerPixel = 50;
-__constant uint MaxBounceCount = 80;
+__constant uint IncomingRaysPerPixel = 300;
+__constant uint MaxBounceCount = 10;
 __constant uint BVHStackSize = 64;
 
 // Math
@@ -14,8 +14,7 @@ typedef struct {
 
 typedef struct {
   BoundingBox bounds;
-  ulong childIndex;
-  ulong firstTriangleIdx;
+  ulong index; // If this is a leaf node, then its the FIRST_TRI_INDEX. otherwise it is CHILD_INDEX.
   ulong numTriangles;
 } Node;
 
@@ -319,8 +318,8 @@ HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
     float dist;
   } BVHStackEntry;
 
-  BVHStackEntry stack[BVHStackSize];
-  size_t stackPtr = 0;
+  private BVHStackEntry stack[BVHStackSize];
+  private size_t stackPtr = 0;
   float distToRoot;
   if (!RayBoundingBox(ray, nodeList[nodeIdx].bounds.min,
                       nodeList[nodeIdx].bounds.max, &distToRoot)) {
@@ -332,26 +331,24 @@ HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
   while (stackPtr > 0) {
     BVHStackEntry entry = stack[--stackPtr];
     Node node = nodeList[entry.nodeIdx];
+    if (node.numTriangles == 0 && node.index == 0)
+      continue; // invalid node
 
     if (entry.dist >= closestHit.dst)
       continue;
 
-    if (node.childIndex == 0) {
-      // Leaf node: test all triangles
+    if (node.numTriangles > 0) { // "if (isLeafNode)"
       for (ulong i = 0; i < node.numTriangles; ++i) {
-        ulong triIdx = node.firstTriangleIdx + i;
+        ulong triIdx = node.index + i;
         HitInfo hit = RayTriangle(ray, triangles[triIdx]);
         if (hit.didHit && hit.dst < closestHit.dst) {
           closestHit = hit;
         }
       }
     } else {
-      if (node.numTriangles < 2)
-        continue;
-      // Internal node: push children onto stack
-
-      Node childA = nodeList[node.childIndex];
-      Node childB = nodeList[node.childIndex + 1];
+      // If we are not a leaf node, then 'index' means the childIndex
+      Node childA = nodeList[node.index];
+      Node childB = nodeList[node.index + 1];
 
       float distA, distB;
       bool hitA =
@@ -364,23 +361,23 @@ HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
         continue;
       if (!hitB && hitA) {
         if (distA < closestHit.dst) {
-          stack[stackPtr++] = (BVHStackEntry){node.childIndex, distA};
+          stack[stackPtr++] = (BVHStackEntry){node.index, distA};
         }
         continue;
       }
       if (hitB && !hitA) {
         if (distB < closestHit.dst) {
-          stack[stackPtr++] = (BVHStackEntry){node.childIndex + 1, distB};
+          stack[stackPtr++] = (BVHStackEntry){node.index + 1, distB};
         }
         continue;
       }
 
       if (distA < distB) {
-        stack[stackPtr++] = (BVHStackEntry){node.childIndex + 1, distB};
-        stack[stackPtr++] = (BVHStackEntry){node.childIndex, distA};
+        stack[stackPtr++] = (BVHStackEntry){node.index + 1, distB};
+        stack[stackPtr++] = (BVHStackEntry){node.index, distA};
       } else {
-        stack[stackPtr++] = (BVHStackEntry){node.childIndex, distA};
-        stack[stackPtr++] = (BVHStackEntry){node.childIndex + 1, distB};
+        stack[stackPtr++] = (BVHStackEntry){node.index, distA};
+        stack[stackPtr++] = (BVHStackEntry){node.index + 1, distB};
       }
     }
   }
