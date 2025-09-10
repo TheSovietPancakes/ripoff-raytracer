@@ -113,33 +113,79 @@ void GrowToInclude(BoundingBox& box, const Triangle& tri) {
   GrowToInclude(box, tri.posC);
 }
 
+float3 CalculateTriangleCentroid(const Triangle& tri) { return (tri.posA + tri.posB + tri.posC) / 3.0f; }
+
 typedef struct {
-  uint splitAxis;
+  int splitAxis;
   float splitPos;
+  float cost;
 } SplitAxisAndPos;
 
-SplitAxisAndPos ChooseSplitAxisAndPosition(const Node& parent) {
-  // Choose the axis with the largest extent
-  float3 extents = parent.bounds.max - parent.bounds.min;
-  uint axis = 0;
-  if (extents.y > extents.x && extents.y >= extents.z)
-    axis = 1;
-  else if (extents.z > extents.x && extents.z >= extents.y)
-    axis = 2;
-
-  // Choose the split position as the midpoint along that axis
-  float splitPos = 0.5f * (parent.bounds.min.s[axis] + parent.bounds.max.s[axis]);
-
-  return {axis, splitPos};
+float NodeCost(cl_float3 size, int numTriangles) {
+  float halfArea = size.x * (size.y + size.z) + size.y * size.z;
+  return halfArea * numTriangles;
 }
 
-float3 CalculateTriangleCentroid(const Triangle& tri) { return (tri.posA + tri.posB + tri.posC) / 3.0f; }
+float EvaluateSplit(const Node& node, int splitAxis, float splitPos) {
+  BoundingBox boxA, boxB;
+  int numInA = 0, numInB = 0;
+
+  for (int i = node.firstTriangleIdx; i < node.firstTriangleIdx + node.numTriangles; i++) {
+    float3 centroid = CalculateTriangleCentroid(triangleList[i]);
+    if (centroid.s[splitAxis] < splitPos) {
+      GrowToInclude(boxA, triangleList[i]);
+      numInA++;
+    } else {
+      GrowToInclude(boxB, triangleList[i]);
+      numInB++;
+    }
+  }
+
+  return NodeCost(boxA.max - boxA.min, numInA) + NodeCost(boxB.max - boxB.min, numInB);
+}
+
+SplitAxisAndPos ChooseSplitAxisAndPosition(const Node& node) {
+  const int NumTestsPerAxis = 5;
+  float bestCost = CL_FLT_MAX;
+  float bestPos = 0;
+  int bestAxis = 0;
+
+  for (int axis = 0; axis < 3; axis++) {
+    float boundsStart = node.bounds.min.s[axis];
+    float boundsEnd = node.bounds.max.s[axis];
+
+    for (int i = 0; i < NumTestsPerAxis; i++) {
+      float splitT = (i + 1.0f) / (NumTestsPerAxis + 1.0f);
+      float pos = boundsStart + (boundsEnd - boundsStart) * splitT;
+      float cost = EvaluateSplit(node, axis, pos);
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestPos = pos;
+        bestAxis = axis;
+      }
+    }
+  }
+  return {bestAxis, bestPos, bestCost};
+
+  // Use the midpoint along the longest axis as the split position
+  // cl_float3 size = parent.bounds.max - parent.bounds.min;
+  // int longestAxis = 0;
+  // if (size.y > size.x) longestAxis = 1;
+  // if (size.z > size.s[longestAxis]) longestAxis = 2;
+  // float splitPos = parent.bounds.min.s[longestAxis] + size.s[longestAxis] * 0.5f;
+
+  // return {longestAxis, splitPos, 0.0f};
+}
 
 void SplitBVH(Node& parent, int depth = 10) {
   if (depth == 0 || parent.numTriangles <= 2)
     return;
 
   SplitAxisAndPos splitInfo = ChooseSplitAxisAndPosition(parent);
+  if (splitInfo.cost >= NodeCost(parent.bounds.max - parent.bounds.min, parent.numTriangles)) {
+    // We shouldn't split here, since the parent is better together than split
+    return;
+  }
 
   // Partition triangles in-place
   size_t leftCount = 0;

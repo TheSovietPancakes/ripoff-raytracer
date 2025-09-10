@@ -137,8 +137,12 @@ inline Ray WorldToLocalRay(Ray worldRay, float3x3 Rinv, float3 pos,
 
   // fast_Normalize direction to maintain numerical stability
   localDirection = fast_normalize(localDirection);
+  Ray r;
+  r.invDir = 1.0f / localDirection;
+  r.origin = localOrigin;
+  r.direction = localDirection;
 
-  return (Ray){localOrigin, localDirection};
+  return r;
 }
 
 inline HitInfo LocalToWorldHit(HitInfo localHit, float3x3 R, float3 pos,
@@ -276,7 +280,7 @@ inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
   // success: build hit
   float w = 1.0f - u - v;
   float3 n = tri.normalA * w + tri.normalB * u + tri.normalC * v;
-  n = fast_normalize(n); // cheaper than fast_normalize()
+  n = fast_normalize(n); // cheaper than normalize()
 
   if (dot(ray.direction, n) > 0.0f)
     return (HitInfo){.didHit = false};
@@ -287,34 +291,21 @@ inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
                    .normal = n};
 }
 
-bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax) {
+bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax,
+                    __private float *outDist) {
   // Pitch, yaw, roll, and scale are handled outside this function
   // Do a normal cube AABB test
-  float3 invDir = 1.0f / ray.direction;
+  // float3 invDir = 1.0f / ray.direction;
+  float3 invDir = ray.invDir;
   float3 t0s = (boundsMin - ray.origin) * invDir;
   float3 t1s = (boundsMax - ray.origin) * invDir;
   float3 tsmaller = fmin(t0s, t1s);
   float3 tbigger = fmax(t0s, t1s);
   float tmin = fmax(fmax(tsmaller.x, tsmaller.y), tsmaller.z);
   float tmax = fmin(fmin(tbigger.x, tbigger.y), tbigger.z);
+  if (outDist)
+    *outDist = tmin;
   return tmax >= fmax(tmin, 0.0f);
-}
-
-float RayBoundingBoxDst(Ray ray, float3 boundsMin, float3 boundsMax) {
-  // Handle division by zero
-  float3 invDir = 1.0f / ray.direction;
-  invDir = isfinite(invDir) ? invDir : (float3)(FLT_MAX, FLT_MAX, FLT_MAX);
-
-  float3 tMin = (boundsMin - ray.origin) * invDir;
-  float3 tMax = (boundsMax - ray.origin) * invDir;
-
-  float3 tSmaller = fmin(tMin, tMax);
-  float3 tBigger = fmax(tMin, tMax);
-
-  float dstNear = fmax(fmax(tSmaller.x, tSmaller.y), tSmaller.z);
-  float dstFar = fmin(fmin(tBigger.x, tBigger.y), tBigger.z);
-
-  return (dstFar >= dstNear && dstFar > 0.0f) ? dstNear : INFINITY;
 }
 
 HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
@@ -323,22 +314,27 @@ HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
   closestHit.didHit = false;
   closestHit.dst = INFINITY;
 
-  size_t stack[BVHStackSize];
+  typedef struct {
+    int nodeIdx;
+    float dist;
+  } BVHStackEntry;
+
+  BVHStackEntry stack[BVHStackSize];
   size_t stackPtr = 0;
-  stack[stackPtr++] = nodeIdx;
+  float distToRoot;
+  if (!RayBoundingBox(ray, nodeList[nodeIdx].bounds.min,
+                      nodeList[nodeIdx].bounds.max, &distToRoot)) {
+    return closestHit; // no hit
+  }
+  // push root
+  stack[stackPtr++] = (BVHStackEntry){.nodeIdx = nodeIdx, .dist = distToRoot};
 
   while (stackPtr > 0) {
-    size_t currentIdx = stack[--stackPtr];
-    Node node = nodeList[currentIdx];
+    BVHStackEntry entry = stack[--stackPtr];
+    Node node = nodeList[entry.nodeIdx];
 
-    if (!RayBoundingBox(ray, node.bounds.min, node.bounds.max)) {
-      continue; // No intersection with this node's bounding box
-    }
-
-    // float dst = RayBoundingBoxDst(ray, node.bounds.min, node.bounds.max);
-    // if (dst > closestHit.dst) {
-    //   continue; // No intersection or farther than closest hit
-    // }
+    if (entry.dist >= closestHit.dst)
+      continue;
 
     if (node.childIndex == 0) {
       // Leaf node: test all triangles
@@ -350,9 +346,42 @@ HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
         }
       }
     } else {
+      if (node.numTriangles < 2)
+        continue;
       // Internal node: push children onto stack
-      stack[stackPtr++] = node.childIndex;
-      stack[stackPtr++] = node.childIndex + 1;
+
+      Node childA = nodeList[node.childIndex];
+      Node childB = nodeList[node.childIndex + 1];
+
+      float distA, distB;
+      bool hitA =
+          RayBoundingBox(ray, childA.bounds.min, childA.bounds.max, &distA);
+      bool hitB =
+          RayBoundingBox(ray, childB.bounds.min, childB.bounds.max, &distB);
+
+      // Both hit, push the closer one first
+      if (!hitB && !hitA)
+        continue;
+      if (!hitB && hitA) {
+        if (distA < closestHit.dst) {
+          stack[stackPtr++] = (BVHStackEntry){node.childIndex, distA};
+        }
+        continue;
+      }
+      if (hitB && !hitA) {
+        if (distB < closestHit.dst) {
+          stack[stackPtr++] = (BVHStackEntry){node.childIndex + 1, distB};
+        }
+        continue;
+      }
+
+      if (distA < distB) {
+        stack[stackPtr++] = (BVHStackEntry){node.childIndex + 1, distB};
+        stack[stackPtr++] = (BVHStackEntry){node.childIndex, distA};
+      } else {
+        stack[stackPtr++] = (BVHStackEntry){node.childIndex, distA};
+        stack[stackPtr++] = (BVHStackEntry){node.childIndex + 1, distB};
+      }
     }
   }
   // VIBE CODED WW
