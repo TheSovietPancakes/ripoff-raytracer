@@ -31,8 +31,11 @@
 // this is how many times pixels are averaged before 1 frame is sent to the window.
 // #define RAYS_PER_PIXEL 1 // unimplemented - open Trace.cl
 // The resolution of the output image and size of the window, if a window is created.
-#define WIDTH 1080
-#define HEIGHT 1920
+// #define WIDTH 1080
+// #define HEIGHT 1920
+// These are the dimensions of an iPhone 16, the phone that I have lol
+#define WIDTH 1179
+#define HEIGHT 2556
 // The path, absolute or relative (to the cwd), to the .obj file to load.
 #define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
 // How much space there is inside the Cornell box between the model and the walls
@@ -219,6 +222,7 @@ int main() {
         .numTriangles = 2,
     };
     nodeList.push_back(n);
+    // SplitBVH(nodeList.size() - 1);
     SplitBVH(nodeList.back());
     MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
                          .material = {

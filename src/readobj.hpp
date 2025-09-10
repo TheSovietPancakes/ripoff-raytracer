@@ -38,9 +38,9 @@ typedef struct {
 
 typedef struct {
   BoundingBox bounds;
-  ulong childIndex = 0;
-  ulong firstTriangleIdx = 0;
-  ulong numTriangles = 0;
+  cl_ulong childIndex = 0;
+  cl_ulong firstTriangleIdx = 0;
+  cl_ulong numTriangles = 0;
 } Node;
 
 typedef struct {
@@ -141,27 +141,53 @@ void SplitBVH(Node& parent, int depth = 10) {
 
   SplitAxisAndPos splitInfo = ChooseSplitAxisAndPosition(parent);
 
-  parent.childIndex = nodeList.size();
-  Node childA = {.firstTriangleIdx = parent.firstTriangleIdx};
-  Node childB = {.firstTriangleIdx = parent.firstTriangleIdx};
-  nodeList.emplace_back(childA);
-  nodeList.emplace_back(childB);
+  // Partition triangles in-place
+  size_t leftCount = 0;
+  size_t rightStart = parent.firstTriangleIdx;
+  size_t rightEnd = parent.firstTriangleIdx + parent.numTriangles - 1;
 
-  for (size_t i = parent.firstTriangleIdx; i < parent.firstTriangleIdx + parent.numTriangles; ++i) {
-    bool isSideA = CalculateTriangleCentroid(triangleList[i]).s[splitInfo.splitAxis] < splitInfo.splitPos;
-    Node& child = isSideA ? nodeList[parent.childIndex] : nodeList[parent.childIndex + 1];
-    GrowToInclude(child.bounds, triangleList[i]);
-    child.numTriangles++;
-    if (!isSideA) {
-      // Move triangle to the end of the parent's triangle list
-      std::swap(triangleList[i], triangleList[parent.firstTriangleIdx + parent.numTriangles - 1]);
+  // Partition triangles using two pointers approach
+  while (rightStart <= rightEnd) {
+    float3 centroid = CalculateTriangleCentroid(triangleList[rightStart]);
+    bool isLeftSide = centroid.s[splitInfo.splitAxis] < splitInfo.splitPos;
+
+    if (isLeftSide) {
+      leftCount++;
+      rightStart++;
+    } else {
+      // Swap with triangle at the end
+      std::swap(triangleList[rightStart], triangleList[rightEnd]);
+      rightEnd--;
     }
   }
 
-  if (nodeList[parent.childIndex].numTriangles > 0)
-    SplitBVH(nodeList[parent.childIndex], depth - 1);
-  if (nodeList[parent.childIndex + 1].numTriangles > 0)
-    SplitBVH(nodeList[parent.childIndex + 1], depth - 1);
+  // Avoid degenerate splits
+  if (leftCount == 0 || leftCount == parent.numTriangles) {
+    return;
+  }
+
+  // Create child nodes
+  parent.childIndex = nodeList.size();
+
+  Node childA = {.childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx, .numTriangles = leftCount};
+
+  Node childB = {.childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx + leftCount, .numTriangles = parent.numTriangles - leftCount};
+
+  // Calculate bounding boxes for children
+  for (size_t i = 0; i < childA.numTriangles; ++i) {
+    GrowToInclude(childA.bounds, triangleList[childA.firstTriangleIdx + i]);
+  }
+
+  for (size_t i = 0; i < childB.numTriangles; ++i) {
+    GrowToInclude(childB.bounds, triangleList[childB.firstTriangleIdx + i]);
+  }
+
+  nodeList.push_back(childA);
+  nodeList.push_back(childB);
+
+  // Recursively split children
+  SplitBVH(nodeList[parent.childIndex], depth - 1);
+  SplitBVH(nodeList[parent.childIndex + 1], depth - 1);
 }
 
 // An inefficient algorithm to read the contents of a Wavefront OBJ file into a list of triangles.
@@ -261,7 +287,8 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
   meshCaches[filename] = c;
   size_t rootIdx = nodeList.size();
   nodeList.push_back(c);
-  SplitBVH(nodeList.back());
+  // SplitBVH(rootIdx, 32);
+  SplitBVH(nodeList[rootIdx], 64);
   return MeshInfo{
       .nodeIdx = rootIdx,
       .pitch = 0.0f,

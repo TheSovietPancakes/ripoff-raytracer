@@ -1,6 +1,6 @@
 // Render quality
-__constant uint IncomingRaysPerPixel = 10;
-__constant uint MaxBounceCount = 10;
+__constant uint IncomingRaysPerPixel = 50;
+__constant uint MaxBounceCount = 80;
 __constant uint BVHStackSize = 64;
 
 // Math
@@ -15,8 +15,8 @@ typedef struct {
 typedef struct {
   BoundingBox bounds;
   ulong childIndex;
-  ulong triangleStartIdx;
-  ulong triangleCount;
+  ulong firstTriangleIdx;
+  ulong numTriangles;
 } Node;
 
 typedef struct {
@@ -43,6 +43,7 @@ typedef struct {
 typedef struct {
   float3 origin;
   float3 direction;
+  float3 invDir;
 } Ray;
 
 typedef struct {
@@ -134,8 +135,8 @@ inline Ray WorldToLocalRay(Ray worldRay, float3x3 Rinv, float3 pos,
     localDirection /= scale;
   }
 
-  // Normalize direction to maintain numerical stability
-  localDirection = normalize(localDirection);
+  // fast_Normalize direction to maintain numerical stability
+  localDirection = fast_normalize(localDirection);
 
   return (Ray){localOrigin, localDirection};
 }
@@ -151,7 +152,7 @@ inline HitInfo LocalToWorldHit(HitInfo localHit, float3x3 R, float3 pos,
   worldHit.hitPoint = mul_mat_vec(R, localHit.hitPoint * scale) + pos;
 
   // Transform normal to world space (no translation needed for normals)
-  worldHit.normal = normalize(mul_mat_vec(R, localHit.normal));
+  worldHit.normal = fast_normalize(mul_mat_vec(R, localHit.normal));
 
   // Calculate correct world space distance
   worldHit.dst = length(worldHit.hitPoint - worldRay.origin);
@@ -194,7 +195,7 @@ float3 RandomDirection(__private uint *state) {
   float x = RandomNormal(state);
   float y = RandomNormal(state);
   float z = RandomNormal(state);
-  float3 v = normalize((float3)(x, y, z));
+  float3 v = fast_normalize((float3)(x, y, z));
   // guard against any NaN/infinite by fallback
   if (!isfinite(v.x) || !isfinite(v.y) || !isfinite(v.z)) {
     // fallback to deterministic direction
@@ -239,11 +240,11 @@ float3 SampleHemisphereCosine(float3 n, __private uint *state) {
   // build orthonormal basis (n, t, b)
   float3 up = fabs(n.z) < 0.999f ? (float3)(0.0f, 0.0f, 1.0f)
                                  : (float3)(1.0f, 0.0f, 0.0f);
-  float3 t = normalize(cross(up, n));
+  float3 t = fast_normalize(cross(up, n));
   float3 b = cross(n, t);
 
   // map disk sample to hemisphere direction in world space (cosine-weighted)
-  return normalize(t * x + b * y + n * z);
+  return fast_normalize(t * x + b * y + n * z);
 }
 
 inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
@@ -275,7 +276,7 @@ inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
   // success: build hit
   float w = 1.0f - u - v;
   float3 n = tri.normalA * w + tri.normalB * u + tri.normalC * v;
-  n = fast_normalize(n); // cheaper than normalize()
+  n = fast_normalize(n); // cheaper than fast_normalize()
 
   if (dot(ray.direction, n) > 0.0f)
     return (HitInfo){.didHit = false};
@@ -299,92 +300,70 @@ bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax) {
   return tmax >= fmax(tmin, 0.0f);
 }
 
-// inline HitInfo RayTriangleBVH(ulong nodeIdx, Ray ray,
-//                               __global const Node *nodeList,
-//                               __global const Triangle *triangles,
-//                               uint *boxTestCount, uint *triTestCount) {
-//   // Define stack in private memory space to ensure it's writable
-// private
-//   size_t stack[BVHStackSize];
-// private
-//   int stackIndex = 0;
-//   stack[stackIndex++] = nodeIdx;
+float RayBoundingBoxDst(Ray ray, float3 boundsMin, float3 boundsMax) {
+  // Handle division by zero
+  float3 invDir = 1.0f / ray.direction;
+  invDir = isfinite(invDir) ? invDir : (float3)(FLT_MAX, FLT_MAX, FLT_MAX);
 
-//   HitInfo result;
-//   result.didHit = false;
-//   result.dst = INFINITY;
+  float3 tMin = (boundsMin - ray.origin) * invDir;
+  float3 tMax = (boundsMax - ray.origin) * invDir;
 
-//   while (stackIndex > 0) {
-//     Node node = nodeList[stack[--stackIndex]];
-//     // Only process children if ray intersects with bounding box
-//     (*boxTestCount)++;
-//     if (RayBoundingBox(ray, node.bounds.min, node.bounds.max)) {
-//       if (node.childIndex == 0) { // Leaf node
-//         for (uint i = node.triangleStartIdx;
-//              i < node.triangleCount + node.triangleStartIdx; i++) {
-//           HitInfo hit = RayTriangle(ray, triangles[i]);
-//           (*triTestCount)++;
-//           if (hit.didHit && hit.dst < result.dst) {
-//             result = hit;
-//           }
-//         }
-//       } else { // Internal node
-//         // Add children to stack for processing
-//         stack[stackIndex++] = node.childIndex;
-//         stack[stackIndex++] = node.childIndex + 1;
-//       }
-//     }
-//   }
+  float3 tSmaller = fmin(tMin, tMax);
+  float3 tBigger = fmax(tMin, tMax);
 
-//   return result;
-// }
+  float dstNear = fmax(fmax(tSmaller.x, tSmaller.y), tSmaller.z);
+  float dstFar = fmin(fmin(tBigger.x, tBigger.y), tBigger.z);
 
-inline HitInfo RayTriangleBVH(ulong nodeIdx, Ray ray,
-                              __global const Node *nodeList,
-                              __global const Triangle *triangles) {
-  // Explicitly declare stack in private memory
-private
-  size_t stack[BVHStackSize];
-private
-  int stackIndex = 0;
-
-  // Initialize result
-  HitInfo result;
-  result.didHit = false;
-  result.dst = INFINITY;
-
-  // Start traversal
-  stack[stackIndex++] = nodeIdx;
-
-  while (stackIndex > 0) {
-    Node node = nodeList[stack[--stackIndex]];
-    // Increment box test count
-    if (RayBoundingBox(ray, node.bounds.min, node.bounds.max)) {
-      if (node.childIndex == 0) {
-        // Leaf node - test triangles
-        for (uint i = node.triangleStartIdx;
-             i < node.triangleCount + node.triangleStartIdx; i++) {
-          HitInfo hit = RayTriangle(ray, triangles[i]);
-          if (hit.didHit && hit.dst < result.dst) {
-            result = hit;
-          }
-        }
-      } else {
-        // Internal node - add children to stack
-        if (stackIndex + 2 <= BVHStackSize) {
-          stack[stackIndex++] = node.childIndex;
-          stack[stackIndex++] = node.childIndex + 1;
-        }
-      }
-    }
-  }
-
-  return result;
+  return (dstFar >= dstNear && dstFar > 0.0f) ? dstNear : INFINITY;
 }
 
-HitInfo CalculateRayCollisionWithTriangle(
-    Ray worldRay, __global const MeshInfo *meshes, int meshCount,
-    __global const Triangle *triangles, __global const Node *nodeList) {
+HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
+                       __global const Triangle *triangles) {
+  HitInfo closestHit;
+  closestHit.didHit = false;
+  closestHit.dst = INFINITY;
+
+  size_t stack[BVHStackSize];
+  size_t stackPtr = 0;
+  stack[stackPtr++] = nodeIdx;
+
+  while (stackPtr > 0) {
+    size_t currentIdx = stack[--stackPtr];
+    Node node = nodeList[currentIdx];
+
+    if (!RayBoundingBox(ray, node.bounds.min, node.bounds.max)) {
+      continue; // No intersection with this node's bounding box
+    }
+
+    // float dst = RayBoundingBoxDst(ray, node.bounds.min, node.bounds.max);
+    // if (dst > closestHit.dst) {
+    //   continue; // No intersection or farther than closest hit
+    // }
+
+    if (node.childIndex == 0) {
+      // Leaf node: test all triangles
+      for (ulong i = 0; i < node.numTriangles; ++i) {
+        ulong triIdx = node.firstTriangleIdx + i;
+        HitInfo hit = RayTriangle(ray, triangles[triIdx]);
+        if (hit.didHit && hit.dst < closestHit.dst) {
+          closestHit = hit;
+        }
+      }
+    } else {
+      // Internal node: push children onto stack
+      stack[stackPtr++] = node.childIndex;
+      stack[stackPtr++] = node.childIndex + 1;
+    }
+  }
+  // VIBE CODED WW
+  return closestHit;
+}
+
+HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
+                                          __global const MeshInfo *meshes,
+                                          int meshCount,
+                                          __global const Triangle *triangles,
+                                          __global const Node *nodeList) {
 
   HitInfo closestHit;
   closestHit.dst = INFINITY;
@@ -406,8 +385,8 @@ HitInfo CalculateRayCollisionWithTriangle(
     Ray localRay = WorldToLocalRay(worldRay, Rinv, info.pos, info.scale);
 
     // Perform intersection test in local space
-    HitInfo localHit = RayTriangleBVH(info.nodeIdx, localRay, nodeList,
-                                      triangles);
+    HitInfo localHit =
+        RayTriangleBVH(info.nodeIdx, localRay, nodeList, triangles);
 
     if (localHit.didHit) {
       // Transform hit back to world space
@@ -431,9 +410,8 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
   float3 incomingLight = (float3)(0.0f, 0.0f, 0.0f);
   float3 throughput = (float3)(1.0f, 1.0f, 1.0f);
   for (uint bounce = 0; bounce < MaxBounceCount; ++bounce) {
-    HitInfo hit =
-        CalculateRayCollisionWithTriangle(ray, meshes, meshCount, triangles,
-                                          nodeList);
+    HitInfo hit = CalculateRayCollisionWithTriangle(ray, meshes, meshCount,
+                                                    triangles, nodeList);
 
     if (!hit.didHit) {
       // environment / background contribution (if any)
@@ -466,6 +444,7 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
     float3 specularDirection = reflect(ray.direction, hit.normal);
     ray.direction =
         lerp3(diffuseDirection, specularDirection, hit.material.reflectiveness);
+    ray.invDir = 1.0f / ray.direction;
 
     // accumulate emission
     incomingLight += throughput * (hit.material.emissionColor *
@@ -495,7 +474,7 @@ Ray MakeRay(CameraInformation camInfo, float2 uv) {
   ndc[0] *= camInfo.aspectRatio; // Adjust for aspect ratio
   float scale = tan(radians(camInfo.fov * 0.5f));
   float3 rayDirCameraSpace =
-      normalize((float3)(ndc[0] * scale, ndc[1] * scale, 1.0f));
+      fast_normalize((float3)(ndc[0] * scale, ndc[1] * scale, 1.0f));
   float cx = native_cos(camInfo.pitch), sx = native_sin(camInfo.pitch);
   float cy = native_cos(camInfo.yaw), sy = native_sin(camInfo.yaw);
   float cz = native_cos(camInfo.roll), sz = native_sin(camInfo.roll);
@@ -506,9 +485,9 @@ Ray MakeRay(CameraInformation camInfo, float2 uv) {
       (float3)(-sy, cy * sx, cx * cy)};
   // Multiply matrices: rotation * rayDirCameraSpace
   float3 rayDirWorldSpace =
-      normalize((float3)(dot(rotation.s0, rayDirCameraSpace),
-                         dot(rotation.s1, rayDirCameraSpace),
-                         dot(rotation.s2, rayDirCameraSpace)));
+      fast_normalize((float3)(dot(rotation.s0, rayDirCameraSpace),
+                              dot(rotation.s1, rayDirCameraSpace),
+                              dot(rotation.s2, rayDirCameraSpace)));
   Ray ray;
   ray.origin = camInfo.position;
   ray.direction = rayDirWorldSpace;
@@ -541,7 +520,6 @@ __kernel void raytrace(__global const MeshInfo *meshes,
   pixelColor = native_powr(pixelColor, (float3)(1.0f / 2.2f));
 
   image[pixelIndex] =
-      (uchar4)((uchar)(pixelColor.x * 255.0f), (uchar)(pixelColor.y *
-      255.0f),
+      (uchar4)((uchar)(pixelColor.x * 255.0f), (uchar)(pixelColor.y * 255.0f),
                (uchar)(pixelColor.z * 255.0f), 255u);
 }
