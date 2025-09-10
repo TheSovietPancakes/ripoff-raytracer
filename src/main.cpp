@@ -26,13 +26,13 @@
 #define CAMERA_START_ROLL 0.0f
 // On each frame, the pRNG's seed is different, and all frames are averaged together to produce a less noisy image.
 // Obviously, the higher this is, the longer yet higher quality the render will be.
-#define FRAME_TOTAL 50
+#define FRAME_TOTAL 1
 // Functionally equivalent to FRAME_TOTAL, but when RENDER_AND_GET_OUT is NOT defined,
 // this is how many times pixels are averaged before 1 frame is sent to the window.
 // #define RAYS_PER_PIXEL 1 // unimplemented - open Trace.cl
 // The resolution of the output image and size of the window, if a window is created.
-#define WIDTH 1920
-#define HEIGHT 1080
+#define WIDTH 1080
+#define HEIGHT 1920
 // The path, absolute or relative (to the cwd), to the .obj file to load.
 #define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
 // How much space there is inside the Cornell box between the model and the walls
@@ -205,19 +205,26 @@ int main() {
   // mesh.material = {.color = {0.8f, 0.8f, 0.8f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 10.0f};
   mesh.yaw = 0.5f;
   mesh.scale = 0.5f;
-  // Recalculate the bounding box of the mesh based on its scale and rotation
-  recalculateMeshBounds(mesh);
+
   // Add a light-emitting triangle underneath the dragon
   auto addQuad = [&](cl_float3 a, cl_float3 b, cl_float3 c, cl_float3 d, cl_float3 normal, cl_float3 color) {
-    MeshInfo quadMesh = {
+    Node n = {
+        .bounds =
+            {
+                .min = {fminf(fminf(a.x, b.x), fminf(c.x, d.x)), fminf(fminf(a.y, b.y), fminf(c.y, d.y)), fminf(fminf(a.z, b.z), fminf(c.z, d.z))},
+                .max = {fmaxf(fmaxf(a.x, b.x), fmaxf(c.x, d.x)), fmaxf(fmaxf(a.y, b.y), fmaxf(c.y, d.y)), fmaxf(fmaxf(a.z, b.z), fmaxf(c.z, d.z))},
+            },
+        .childIndex = 0,
         .firstTriangleIdx = (cl_uint)triangleList.size(),
         .numTriangles = 2,
-        .boundsMin = {fminf(fminf(a.x, b.x), fminf(c.x, d.x)), fminf(fminf(a.y, b.y), fminf(c.y, d.y)), fminf(fminf(a.z, b.z), fminf(c.z, d.z))},
-        .boundsMax = {fmaxf(fmaxf(a.x, b.x), fmaxf(c.x, d.x)), fmaxf(fmaxf(a.y, b.y), fmaxf(c.y, d.y)), fmaxf(fmaxf(a.z, b.z), fmaxf(c.z, d.z))},
-        .material = {
-            .type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 1.0f,
-            // .specularProbability = 0.0f,
-        }};
+    };
+    nodeList.push_back(n);
+    SplitBVH(nodeList.back());
+    MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
+                         .material = {
+                             .type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 1.0f,
+                             // .specularProbability = 0.0f,
+                         }};
 
     // two triangles
     triangleList.push_back({a, b, c, normal, normal, normal});
@@ -225,9 +232,10 @@ int main() {
     meshList.push_back(quadMesh);
   };
 
-  float minX = mesh.boundsMin.x - CORNELL_BREATHING_ROOM, maxX = mesh.boundsMax.x + CORNELL_BREATHING_ROOM;
-  float minY = mesh.boundsMin.y, maxY = mesh.boundsMax.y + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
-  float minZ = mesh.boundsMin.z - CORNELL_BREATHING_ROOM, maxZ = mesh.boundsMax.z + CORNELL_BREATHING_ROOM;
+  float minX = nodeList[mesh.nodeIdx].bounds.min.x - CORNELL_BREATHING_ROOM, maxX = nodeList[mesh.nodeIdx].bounds.max.x + CORNELL_BREATHING_ROOM;
+  float minY = nodeList[mesh.nodeIdx].bounds.min.y,
+        maxY = nodeList[mesh.nodeIdx].bounds.max.y + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
+  float minZ = nodeList[mesh.nodeIdx].bounds.min.z - CORNELL_BREATHING_ROOM, maxZ = nodeList[mesh.nodeIdx].bounds.max.z + CORNELL_BREATHING_ROOM;
 
   // Floor (Y = minY)
   addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, {0, 1, 0}, {0.0f, 0.8f, 0.0f});
@@ -250,12 +258,12 @@ int main() {
   addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.4});
 
   // Right wall (X = maxX)
-  addQuad({maxX, minY, minZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {-1, 0, 0}, {0.4f, 0.2f, 0.2});
+  addQuad({maxX, minY, minZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {-1, 0, 0}, {0.4f, 0.2f, 0.2f});
 
   // Light quad on ceiling
   float lx = 50, lz = 50, ly = maxY - 1; // just below ceiling
   addQuad({-lx, ly, -lz}, {lx, ly, -lz}, {lx, ly, lz}, {-lx, ly, lz}, {0, -1, 0}, {0.0f, 0.0f, 0.0f});
-  meshList.back().material = {MaterialType_Solid, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, 10.0f, 0.0f};
+  meshList.back().material = {MaterialType_Solid, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, 34.0f, 0.0f};
 
   cl_mem triangleBuffer =
       clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, triangleList.size() * sizeof(Triangle), triangleList.data(), &err);
@@ -271,7 +279,7 @@ int main() {
   std::chrono::high_resolution_clock::time_point meshEndTime = std::chrono::high_resolution_clock::now();
   std::cout << " done in " << std::chrono::duration_cast<std::chrono::milliseconds>(meshEndTime - triangleEndTime).count() << " ms ("
             << meshList.size() << ")." << std::endl;
-  cl_mem meshBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, meshList.size() * sizeof(MeshInfo), meshList.data(), &err);
+  cl_mem meshBuffer = clCreateBuffer(ctx, CL_MEM_COPY_HOST_PTR, meshList.size() * sizeof(MeshInfo), meshList.data(), &err);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to create mesh buffer\n";
     return 1;
@@ -279,6 +287,16 @@ int main() {
   cl_mem imageBuffer = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY, WIDTH * HEIGHT * sizeof(cl_uchar4), nullptr, &err);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to create image buffer\n";
+    return 1;
+  }
+  cl_mem nodeBuffer = clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, nodeList.size() * sizeof(Node), nodeList.data(), &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create node buffer\n";
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &nodeBuffer);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg" << std::endl;
     return 1;
   }
 
@@ -577,6 +595,7 @@ int main() {
   size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
   size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
   size_t totalTiles = totalTilesX * totalTilesY;
+  float msPerFrame = -0.0f; // for a more accurate "time remaining" estimate
 
   while (numFrames < FRAME_TOTAL) {
     size_t tileIndex = 0;
@@ -588,9 +607,36 @@ int main() {
         size_t globalSize[2] = {(size_t)w, (size_t)h};
         size_t globalOffset[2] = {(size_t)x, (size_t)y};
 
-        float percentDone = ((float)numFrames / FRAME_TOTAL) + ((float)tileIndex / (totalTiles * FRAME_TOTAL));
+        float percentDoneThisFrame = ((float)tileIndex / (float)totalTiles);
+        float percentDone = ((float)numFrames / FRAME_TOTAL);
+        percentDone += percentDoneThisFrame / FRAME_TOTAL;
         std::cout << "\rRendering frame " << (numFrames + 1) << " of " << FRAME_TOTAL << " (" << std::fixed << std::setprecision(2)
-                  << (percentDone * 100.0f) << "%) ..." << std::flush;
+                  << (percentDone * 100.0f) << "%) ...";
+        if (numFrames > 0 || x > 0 || y > 0) { // Ensure we are not on the first tile of the first frame
+          // Calculate overall progress based on frames and tiles
+          float timeRemaining;
+          if (msPerFrame == -0.0f) {
+            std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
+            auto deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(nowTime - startTime);
+            // no need to calculate msPerFrame since the entire purpose of that variable is to be used once a full
+            // frame has actually been rendered
+            timeRemaining = ((float)deltaTime.count() / (float)(numFrames + percentDoneThisFrame)) *
+                            ((float)(FRAME_TOTAL - numFrames) - percentDoneThisFrame) / 1000.0f;
+          } else {
+            // We have an average! Yay!
+            float totalFramesLeft = (FRAME_TOTAL - 2) - numFrames; // -2 because off-by-1 and because we are mid render
+            float currentFrameLeft = 1.0f - percentDoneThisFrame;
+            timeRemaining = ((totalFramesLeft + currentFrameLeft) * msPerFrame) / 1000.0f;
+          }
+          if (timeRemaining > 60.0f) {
+            unsigned long minutes = (unsigned long)(timeRemaining / 60.0f);
+            unsigned long seconds = (unsigned long)(timeRemaining) % 60;
+            std::cout << " (time remaining: " << minutes << "m" << seconds << "s) ";
+          } else {
+            std::cout << " (time remaining: " << std::fixed << std::setprecision(2) << timeRemaining << "s) ";
+          }
+        }
+        std::cout << std::flush;
         err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
         if (err != CL_SUCCESS) {
           std::cerr << "Failed to set kernel arg: " << err << "\n";
@@ -623,7 +669,13 @@ int main() {
     for (size_t i = 0; i < pixels.size(); ++i) {
       intBuffer[i] += pixels[i];
     }
+
     numFrames++;
+
+    // Set the time per frame
+    std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
+    auto deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(nowTime - startTime);
+    msPerFrame = (deltaTime.count()) / (float)(numFrames);
 
 #ifdef RELAX_GPU
     if (numFrames == FRAME_TOTAL - 1)

@@ -1,13 +1,11 @@
 #pragma once
 
-#include "CL/cl.h"
-#include <array>
+#include <CL/cl.h>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -27,66 +25,151 @@ using float4 = cl_float4;
 //   return os;
 // }
 
-typedef struct {
-  float3 boundsMin = {0.0f, 0.0f, 0.0f};
-  float3 boundsMax = {0.0f, 0.0f, 0.0f};
-  size_t firstTriangleIdx = 0;
-  size_t numTriangles = 0;
-} MeshCache;
+cl_float3 operator+(const cl_float3& a, const cl_float3& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+cl_float3 operator-(const cl_float3& a, const cl_float3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+cl_float3 operator*(const cl_float3& a, const cl_float3& b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
+cl_float3 operator*(const cl_float3& a, float b) { return {a.x * b, a.y * b, a.z * b}; }
+cl_float3 operator/(const cl_float3& a, float b) { return {a.x / b, a.y / b, a.z / b}; }
 
 typedef struct {
-  float3 position = {0.0f, 0.0f, 0.0f};
-  float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
-  float fov = 45.0f;
-  float aspectRatio = 16.0f / 9.0f;
+  float3 min = {CL_FLT_MAX, CL_FLT_MAX, CL_FLT_MAX};
+  float3 max = {CL_FLT_MIN, CL_FLT_MIN, CL_FLT_MIN};
+} BoundingBox;
+
+typedef struct {
+  BoundingBox bounds;
+  ulong childIndex = 0;
+  ulong firstTriangleIdx = 0;
+  ulong numTriangles = 0;
+} Node;
+
+typedef struct {
+  float3 position;
+  float pitch, yaw, roll;
+  float fov;
+  float aspectRatio;
 } CameraInformation;
 
 typedef enum { MaterialType_Solid = 0, MaterialType_Checker = 1, MaterialType_Invisible = 2 } MaterialType;
 
 typedef struct {
-  MaterialType type = MaterialType_Solid;
-  float3 color = {1.0f, 1.0f, 1.0f};
-  float3 emissionColor = {0.0f, 0.0f, 0.0f};
-  float emissionStrength = 0.0f;
-  float reflectiveness = 0.0f;
-  // float specularProbability = 0.0f;
+  MaterialType type;
+  float3 color;
+  float3 emissionColor;
+  float emissionStrength;
+  float reflectiveness;
 } RayTracingMaterial;
 
 typedef struct {
-  float3 posA = {0.0f, 0.0f, 0.0f};
-  float3 posB = {0.0f, 0.0f, 0.0f};
-  float3 posC = {0.0f, 0.0f, 0.0f};
+  float3 center;
+  float radius;
+  RayTracingMaterial material;
+} Sphere;
+
+typedef struct {
+  float3 origin;
+  float3 direction;
+} Ray;
+
+typedef struct {
+  float3 posA, posB, posC;
   // normal
-  float3 normalA = {0.0f, 0.0f, 0.0f};
-  float3 normalB = {0.0f, 0.0f, 0.0f};
-  float3 normalC = {0.0f, 0.0f, 0.0f};
+  float3 normalA, normalB, normalC;
 } Triangle;
 
 typedef struct {
-  uint firstTriangleIdx = 0;
-  uint numTriangles = 0;
-  float3 boundsMin = {0.0f, 0.0f, 0.0f};
-  float3 boundsMax = {0.0f, 0.0f, 0.0f};
+  size_t nodeIdx;
   float3 pos = {0.0f, 0.0f, 0.0f};
   float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
   float scale = 1.0f;
   RayTracingMaterial material;
 } MeshInfo;
 
-std::unordered_map<std::string, MeshCache> meshCaches = {};
+typedef struct {
+  bool didHit;
+  float dst;
+  float3 hitPoint;
+  float3 normal;
+  RayTracingMaterial material;
+} HitInfo;
+
+std::unordered_map<std::string, Node> meshCaches = {};
 std::vector<MeshInfo> meshList = {};
 std::vector<Triangle> triangleList = {};
+std::vector<Node> nodeList = {};
+
+void GrowToInclude(BoundingBox& box, const float3& point) {
+  box.min.x = std::min(box.min.x, point.x);
+  box.min.y = std::min(box.min.y, point.y);
+  box.min.z = std::min(box.min.z, point.z);
+  box.max.x = std::max(box.max.x, point.x);
+  box.max.y = std::max(box.max.y, point.y);
+  box.max.z = std::max(box.max.z, point.z);
+}
+
+void GrowToInclude(BoundingBox& box, const Triangle& tri) {
+  GrowToInclude(box, tri.posA);
+  GrowToInclude(box, tri.posB);
+  GrowToInclude(box, tri.posC);
+}
+
+typedef struct {
+  uint splitAxis;
+  float splitPos;
+} SplitAxisAndPos;
+
+SplitAxisAndPos ChooseSplitAxisAndPosition(const Node& parent) {
+  // Choose the axis with the largest extent
+  float3 extents = parent.bounds.max - parent.bounds.min;
+  uint axis = 0;
+  if (extents.y > extents.x && extents.y >= extents.z)
+    axis = 1;
+  else if (extents.z > extents.x && extents.z >= extents.y)
+    axis = 2;
+
+  // Choose the split position as the midpoint along that axis
+  float splitPos = 0.5f * (parent.bounds.min.s[axis] + parent.bounds.max.s[axis]);
+
+  return {axis, splitPos};
+}
+
+float3 CalculateTriangleCentroid(const Triangle& tri) { return (tri.posA + tri.posB + tri.posC) / 3.0f; }
+
+void SplitBVH(Node& parent, int depth = 10) {
+  if (depth == 0 || parent.numTriangles <= 2)
+    return;
+
+  SplitAxisAndPos splitInfo = ChooseSplitAxisAndPosition(parent);
+
+  parent.childIndex = nodeList.size();
+  Node childA = {.firstTriangleIdx = parent.firstTriangleIdx};
+  Node childB = {.firstTriangleIdx = parent.firstTriangleIdx};
+  nodeList.emplace_back(childA);
+  nodeList.emplace_back(childB);
+
+  for (size_t i = parent.firstTriangleIdx; i < parent.firstTriangleIdx + parent.numTriangles; ++i) {
+    bool isSideA = CalculateTriangleCentroid(triangleList[i]).s[splitInfo.splitAxis] < splitInfo.splitPos;
+    Node& child = isSideA ? nodeList[parent.childIndex] : nodeList[parent.childIndex + 1];
+    GrowToInclude(child.bounds, triangleList[i]);
+    child.numTriangles++;
+    if (!isSideA) {
+      // Move triangle to the end of the parent's triangle list
+      std::swap(triangleList[i], triangleList[parent.firstTriangleIdx + parent.numTriangles - 1]);
+    }
+  }
+
+  if (nodeList[parent.childIndex].numTriangles > 0)
+    SplitBVH(nodeList[parent.childIndex], depth - 1);
+  if (nodeList[parent.childIndex + 1].numTriangles > 0)
+    SplitBVH(nodeList[parent.childIndex + 1], depth - 1);
+}
 
 // An inefficient algorithm to read the contents of a Wavefront OBJ file into a list of triangles.
 MeshInfo loadMeshFromOBJFile(const std::string& filename) {
   if (meshCaches.find(filename) != meshCaches.end()) {
     size_t idx = meshCaches[filename].firstTriangleIdx;
     // Return a new mesh with triangle info pointing to the existing triangles
-    return MeshInfo{.firstTriangleIdx = (cl_uint)idx,
-                    .numTriangles = (cl_uint)meshCaches[filename].numTriangles,
-                    .boundsMin = meshCaches[filename].boundsMin, // It is the user's responsibility to add the Mesh's position to this
-                    .boundsMax = meshCaches[filename].boundsMax,
-                    .material = {.color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
+    return MeshInfo{.nodeIdx = idx, .material = {.color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
   }
   std::ifstream file(filename);
   if (!file) {
@@ -160,95 +243,30 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
   file.close();
   size_t firstTriangleIdx = triangleList.size() - (triCount);
   size_t numTriangles = triCount;
-  MeshCache c = {
+  Node c = {
+      .childIndex = 0,
       .firstTriangleIdx = firstTriangleIdx,
       .numTriangles = numTriangles,
   };
   // Calculate bounds
   for (size_t tri = 0; tri < numTriangles; ++tri) {
     Triangle& t = triangleList[firstTriangleIdx + tri];
-    c.boundsMin.x = std::min(c.boundsMin.x, std::min(t.posA.x, std::min(t.posB.x, t.posC.x)));
-    c.boundsMin.y = std::min(c.boundsMin.y, std::min(t.posA.y, std::min(t.posB.y, t.posC.y)));
-    c.boundsMin.z = std::min(c.boundsMin.z, std::min(t.posA.z, std::min(t.posB.z, t.posC.z)));
-    c.boundsMax.x = std::max(c.boundsMax.x, std::max(t.posA.x, std::max(t.posB.x, t.posC.x)));
-    c.boundsMax.y = std::max(c.boundsMax.y, std::max(t.posA.y, std::max(t.posB.y, t.posC.y)));
-    c.boundsMax.z = std::max(c.boundsMax.z, std::max(t.posA.z, std::max(t.posB.z, t.posC.z)));
+    c.bounds.min.x = std::min(c.bounds.min.x, std::min(t.posA.x, std::min(t.posB.x, t.posC.x)));
+    c.bounds.min.y = std::min(c.bounds.min.y, std::min(t.posA.y, std::min(t.posB.y, t.posC.y)));
+    c.bounds.min.z = std::min(c.bounds.min.z, std::min(t.posA.z, std::min(t.posB.z, t.posC.z)));
+    c.bounds.max.x = std::max(c.bounds.max.x, std::max(t.posA.x, std::max(t.posB.x, t.posC.x)));
+    c.bounds.max.y = std::max(c.bounds.max.y, std::max(t.posA.y, std::max(t.posB.y, t.posC.y)));
+    c.bounds.max.z = std::max(c.bounds.max.z, std::max(t.posA.z, std::max(t.posB.z, t.posC.z)));
   }
   meshCaches[filename] = c;
-  return MeshInfo{.firstTriangleIdx = (cl_uint)firstTriangleIdx,
-                  .numTriangles = (cl_uint)numTriangles,
-                  .boundsMin = c.boundsMin, // It is the user's responsibility to add the Mesh's position to this
-                  .boundsMax = c.boundsMax,
-                  .pitch = 0.0f,
-                  .yaw = 0.0f,
-                  .roll = 0.0f,
-                  .scale = 1.0f,
-                  .material = {
-                      .type = MaterialType_Solid,
-                      .color = {1.0f, 1.0f, 1.0f},
-                      .emissionColor = {0.0f, 0.0f, 0.0f},
-                      .emissionStrength = 0.0f,
-                      .reflectiveness = 0.0f,
-                      // .specularProbability = 0.0f,
-                  }};
-}
-
-void recalculateMeshBounds(MeshInfo& mesh) {
-  // Reset bounds
-  mesh.boundsMin = {CL_FLT_MAX, CL_FLT_MAX, CL_FLT_MAX};
-  mesh.boundsMax = {-CL_FLT_MAX, -CL_FLT_MAX, -CL_FLT_MAX};
-
-  // Precompute sine and cosine of rotation angles
-  float cosYaw = cos(mesh.yaw);
-  float sinYaw = sin(mesh.yaw);
-  float cosPitch = cos(mesh.pitch);
-  float sinPitch = sin(mesh.pitch);
-  float cosRoll = cos(mesh.roll);
-  float sinRoll = sin(mesh.roll);
-
-  for (size_t tri = 0; tri < mesh.numTriangles; ++tri) {
-    Triangle& t = triangleList[mesh.firstTriangleIdx + tri];
-    cl_float3 vertices[3] = {t.posA, t.posB, t.posC};
-
-    for (int i = 0; i < 3; ++i) {
-      cl_float3 v = vertices[i];
-
-      // Apply scaling
-      v.x *= mesh.scale;
-      v.y *= mesh.scale;
-      v.z *= mesh.scale;
-
-      // Apply rotation (Yaw-Pitch-Roll)
-      // Yaw (around Y axis)
-      float x1 = v.x * cosYaw - v.z * sinYaw;
-      float z1 = v.x * sinYaw + v.z * cosYaw;
-      v.x = x1;
-      v.z = z1;
-
-      // Pitch (around X axis)
-      float y2 = v.y * cosPitch - v.z * sinPitch;
-      float z2 = v.y * sinPitch + v.z * cosPitch;
-      v.y = y2;
-      v.z = z2;
-
-      // Roll (around Z axis)
-      float x3 = v.x * cosRoll - v.y * sinRoll;
-      float y3 = v.x * sinRoll + v.y * cosRoll;
-      v.x = x3;
-      v.y = y3;
-
-      // Apply translation
-      v.x += mesh.pos.x;
-      v.y += mesh.pos.y;
-      v.z += mesh.pos.z;
-
-      // Update bounds
-      mesh.boundsMin.x = std::min(mesh.boundsMin.x, v.x);
-      mesh.boundsMin.y = std::min(mesh.boundsMin.y, v.y);
-      mesh.boundsMin.z = std::min(mesh.boundsMin.z, v.z);
-      mesh.boundsMax.x = std::max(mesh.boundsMax.x, v.x);
-      mesh.boundsMax.y = std::max(mesh.boundsMax.y, v.y);
-      mesh.boundsMax.z = std::max(mesh.boundsMax.z, v.z);
-    }
-  }
+  size_t rootIdx = nodeList.size();
+  nodeList.push_back(c);
+  SplitBVH(nodeList.back());
+  return MeshInfo{
+      .nodeIdx = rootIdx,
+      .pitch = 0.0f,
+      .yaw = 0.0f,
+      .roll = 0.0f,
+      .scale = 1.0f,
+      .material = {.type = MaterialType_Solid, .color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
 }

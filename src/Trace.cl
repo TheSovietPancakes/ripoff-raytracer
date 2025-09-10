@@ -1,10 +1,23 @@
 // Render quality
-__constant uint IncomingRaysPerPixel = 400;
-__constant uint MaxBounceCount = 150;
+__constant uint IncomingRaysPerPixel = 10;
+__constant uint MaxBounceCount = 10;
+__constant uint BVHStackSize = 64;
 
 // Math
 __constant float tau = 6.28318530717958647692f; // 2pi
 __constant float EPSILON = 1e-6f; // Tiny number for finding precision errors
+
+typedef struct {
+  float3 min;
+  float3 max;
+} BoundingBox;
+
+typedef struct {
+  BoundingBox bounds;
+  ulong childIndex;
+  ulong triangleStartIdx;
+  ulong triangleCount;
+} Node;
 
 typedef struct {
   float3 position;
@@ -25,7 +38,6 @@ typedef struct {
   float3 emissionColor;
   float emissionStrength;
   float reflectiveness; // 0-1
-  // float specularProbability; // 0-1
 } RayTracingMaterial;
 
 typedef struct {
@@ -40,10 +52,7 @@ typedef struct {
 } Triangle;
 
 typedef struct {
-  uint firstTriangleIdx;
-  uint numTriangles;
-  float3 boundsMin;
-  float3 boundsMax;
+  size_t nodeIdx;
   float3 pos;
   float pitch, yaw, roll;
   float scale;
@@ -61,6 +70,94 @@ typedef struct {
 typedef struct {
   float3 s0, s1, s2;
 } float3x3;
+
+inline void GrowBoundingBox(__private BoundingBox *box, Triangle tri) {
+  box->min = fmin(box->min, fmin(tri.posA, fmin(tri.posB, tri.posC)));
+  box->max = fmax(box->max, fmax(tri.posA, fmax(tri.posB, tri.posC)));
+}
+
+float3 lerp3(float3 a, float3 b, float t) { return a * (1.0f - t) + b * t; }
+
+float lerp(float a, float b, float t) { return a * (1.0f - t) + b * t; }
+
+float2 mod2(float2 x, float2 y) { return x - y * floor(x / y); }
+
+inline float3x3 makeRotation(float pitch, float yaw, float roll) {
+  float cx = native_cos(pitch), sx = native_sin(pitch);
+  float cy = native_cos(yaw), sy = native_sin(yaw);
+  float cz = native_cos(roll), sz = native_sin(roll);
+
+  float3x3 result;
+  result.s0 = (float3)(cy * cz, cy * sz, -sy);
+  result.s1 = (float3)(cz * sy * sx - cx * sz, cx * cz + sx * sy * sz, cy * sx);
+  result.s2 = (float3)(sx * sz + cx * cz * sy, cx * sy * sz - cz * sx, cx * cy);
+  return result;
+}
+
+// helpers for float3x3 (works with your typedef: typedef struct { float3 s0,
+// s1, s2; } float3x3;)
+
+static inline float3 mul_mat_vec(const float3x3 m, const float3 v) {
+  return (float3)(dot(m.s0, v), dot(m.s1, v), dot(m.s2, v));
+}
+
+static inline float3x3 transpose_mat(const float3x3 m) {
+  // rows become columns
+  float3x3 result;
+  result.s0 = (float3)(m.s0.x, m.s1.x, m.s2.x);
+  result.s1 = (float3)(m.s0.y, m.s1.y, m.s2.y);
+  result.s2 = (float3)(m.s0.z, m.s1.z, m.s2.z);
+  return result;
+}
+
+static inline float3x3 make_rotation_xyz(float pitch, float yaw, float roll) {
+  // same convention you used elsewhere; rows are the basis vectors
+  float cx = native_cos(pitch), sx = native_sin(pitch);
+  float cy = native_cos(yaw), sy = native_sin(yaw);
+  float cz = native_cos(roll), sz = native_sin(roll);
+
+  float3x3 m;
+  m.s0 = (float3)(cy * cz, cz * sy * sx - cx * sz, sx * sz + cx * cz * sy);
+  m.s1 = (float3)(cy * sz, cx * cz + sx * sy * sz, cx * sy * sz - cz * sx);
+  m.s2 = (float3)(-sy, cy * sx, cx * cy);
+  return m;
+}
+
+inline Ray WorldToLocalRay(Ray worldRay, float3x3 Rinv, float3 pos,
+                           float scale) {
+  float3 localOrigin = mul_mat_vec(Rinv, (worldRay.origin - pos));
+  float3 localDirection = mul_mat_vec(Rinv, worldRay.direction);
+
+  // Apply scale after rotation to maintain numerical stability
+  if (fabs(scale) > EPSILON) {
+    localOrigin /= scale;
+    localDirection /= scale;
+  }
+
+  // Normalize direction to maintain numerical stability
+  localDirection = normalize(localDirection);
+
+  return (Ray){localOrigin, localDirection};
+}
+
+inline HitInfo LocalToWorldHit(HitInfo localHit, float3x3 R, float3 pos,
+                               float scale, Ray worldRay) {
+  if (!localHit.didHit)
+    return localHit;
+
+  HitInfo worldHit = localHit;
+
+  // Transform hit point back to world space
+  worldHit.hitPoint = mul_mat_vec(R, localHit.hitPoint * scale) + pos;
+
+  // Transform normal to world space (no translation needed for normals)
+  worldHit.normal = normalize(mul_mat_vec(R, localHit.normal));
+
+  // Calculate correct world space distance
+  worldHit.dst = length(worldHit.hitPoint - worldRay.origin);
+
+  return worldHit;
+}
 
 inline float SafelyMapU32ToFloat(uint s) {
   // map 0..2^32-1 -> (0,1) using (s+1)/2^32 so we never get exactly 0 or 1
@@ -189,12 +286,12 @@ inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
                    .normal = n};
 }
 
-bool RayBoundingBox(Ray ray, MeshInfo info) {
+bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax) {
   // Pitch, yaw, roll, and scale are handled outside this function
   // Do a normal cube AABB test
   float3 invDir = 1.0f / ray.direction;
-  float3 t0s = (info.boundsMin + info.pos - ray.origin) * invDir;
-  float3 t1s = (info.boundsMax + info.pos - ray.origin) * invDir;
+  float3 t0s = (boundsMin - ray.origin) * invDir;
+  float3 t1s = (boundsMax - ray.origin) * invDir;
   float3 tsmaller = fmin(t0s, t1s);
   float3 tbigger = fmax(t0s, t1s);
   float tmin = fmax(fmax(tsmaller.x, tsmaller.y), tsmaller.z);
@@ -202,51 +299,93 @@ bool RayBoundingBox(Ray ray, MeshInfo info) {
   return tmax >= fmax(tmin, 0.0f);
 }
 
-inline float3x3 makeRotation(float pitch, float yaw, float roll) {
-  float cx = native_cos(pitch), sx = native_sin(pitch);
-  float cy = native_cos(yaw), sy = native_sin(yaw);
-  float cz = native_cos(roll), sz = native_sin(roll);
+// inline HitInfo RayTriangleBVH(ulong nodeIdx, Ray ray,
+//                               __global const Node *nodeList,
+//                               __global const Triangle *triangles,
+//                               uint *boxTestCount, uint *triTestCount) {
+//   // Define stack in private memory space to ensure it's writable
+// private
+//   size_t stack[BVHStackSize];
+// private
+//   int stackIndex = 0;
+//   stack[stackIndex++] = nodeIdx;
 
-  float3x3 result;
-  result.s0 = (float3)(cy * cz, cy * sz, -sy);
-  result.s1 = (float3)(cz * sy * sx - cx * sz, cx * cz + sx * sy * sz, cy * sx);
-  result.s2 = (float3)(sx * sz + cx * cz * sy, cx * sy * sz - cz * sx, cx * cy);
+//   HitInfo result;
+//   result.didHit = false;
+//   result.dst = INFINITY;
+
+//   while (stackIndex > 0) {
+//     Node node = nodeList[stack[--stackIndex]];
+//     // Only process children if ray intersects with bounding box
+//     (*boxTestCount)++;
+//     if (RayBoundingBox(ray, node.bounds.min, node.bounds.max)) {
+//       if (node.childIndex == 0) { // Leaf node
+//         for (uint i = node.triangleStartIdx;
+//              i < node.triangleCount + node.triangleStartIdx; i++) {
+//           HitInfo hit = RayTriangle(ray, triangles[i]);
+//           (*triTestCount)++;
+//           if (hit.didHit && hit.dst < result.dst) {
+//             result = hit;
+//           }
+//         }
+//       } else { // Internal node
+//         // Add children to stack for processing
+//         stack[stackIndex++] = node.childIndex;
+//         stack[stackIndex++] = node.childIndex + 1;
+//       }
+//     }
+//   }
+
+//   return result;
+// }
+
+inline HitInfo RayTriangleBVH(ulong nodeIdx, Ray ray,
+                              __global const Node *nodeList,
+                              __global const Triangle *triangles) {
+  // Explicitly declare stack in private memory
+private
+  size_t stack[BVHStackSize];
+private
+  int stackIndex = 0;
+
+  // Initialize result
+  HitInfo result;
+  result.didHit = false;
+  result.dst = INFINITY;
+
+  // Start traversal
+  stack[stackIndex++] = nodeIdx;
+
+  while (stackIndex > 0) {
+    Node node = nodeList[stack[--stackIndex]];
+    // Increment box test count
+    if (RayBoundingBox(ray, node.bounds.min, node.bounds.max)) {
+      if (node.childIndex == 0) {
+        // Leaf node - test triangles
+        for (uint i = node.triangleStartIdx;
+             i < node.triangleCount + node.triangleStartIdx; i++) {
+          HitInfo hit = RayTriangle(ray, triangles[i]);
+          if (hit.didHit && hit.dst < result.dst) {
+            result = hit;
+          }
+        }
+      } else {
+        // Internal node - add children to stack
+        if (stackIndex + 2 <= BVHStackSize) {
+          stack[stackIndex++] = node.childIndex;
+          stack[stackIndex++] = node.childIndex + 1;
+        }
+      }
+    }
+  }
+
   return result;
 }
 
-// helpers for float3x3 (works with your typedef: typedef struct { float3 s0,
-// s1, s2; } float3x3;)
+HitInfo CalculateRayCollisionWithTriangle(
+    Ray worldRay, __global const MeshInfo *meshes, int meshCount,
+    __global const Triangle *triangles, __global const Node *nodeList) {
 
-static inline float3 mul_mat_vec(const float3x3 m, const float3 v) {
-  return (float3)(dot(m.s0, v), dot(m.s1, v), dot(m.s2, v));
-}
-
-static inline float3x3 transpose_mat(const float3x3 m) {
-  // rows become columns
-  float3x3 result;
-  result.s0 = (float3)(m.s0.x, m.s1.x, m.s2.x);
-  result.s1 = (float3)(m.s0.y, m.s1.y, m.s2.y);
-  result.s2 = (float3)(m.s0.z, m.s1.z, m.s2.z);
-  return result;
-}
-
-static inline float3x3 make_rotation_xyz(float pitch, float yaw, float roll) {
-  // same convention you used elsewhere; rows are the basis vectors
-  float cx = native_cos(pitch), sx = native_sin(pitch);
-  float cy = native_cos(yaw), sy = native_sin(yaw);
-  float cz = native_cos(roll), sz = native_sin(roll);
-
-  float3x3 m;
-  m.s0 = (float3)(cy * cz, cz * sy * sx - cx * sz, sx * sz + cx * cz * sy);
-  m.s1 = (float3)(cy * sz, cx * cz + sx * sy * sz, cx * sy * sz - cz * sx);
-  m.s2 = (float3)(-sy, cy * sx, cx * cy);
-  return m;
-}
-
-HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
-                                          __global const MeshInfo *meshes,
-                                          int meshCount,
-                                          __global const Triangle *triangles) {
   HitInfo closestHit;
   closestHit.dst = INFINITY;
   closestHit.didHit = false;
@@ -254,110 +393,48 @@ HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
   for (int meshIdx = 0; meshIdx < meshCount; ++meshIdx) {
     MeshInfo info = meshes[meshIdx];
 
-    // skip degenerate
+    // Skip degenerate meshes
     if (info.scale <= EPSILON)
       continue;
 
-    // quick AABB test in world space using existing helper
-    if (!RayBoundingBox(worldRay, info))
-      continue;
-
-    // build rotation matrix (local -> world). R rows are basis vectors.
+    // Build rotation matrices
     float3x3 R = make_rotation_xyz(info.pitch, info.yaw, info.roll);
-    // inverse rotation (world -> local) is transpose for orthonormal R
-    float3x3 Rinv = transpose_mat(R);
+    float3x3 Rinv =
+        transpose_mat(R); // Inverse for orthonormal matrix is transpose
 
-    // transform ray into mesh local space (world -> local)
-    float3 localOrigin =
-        mul_mat_vec(Rinv, (worldRay.origin - info.pos)) / info.scale;
-    float3 localDirection = mul_mat_vec(Rinv, worldRay.direction) / info.scale;
-    // normalize dir to keep numeric stability
-    localDirection = normalize(localDirection);
+    // Transform ray to local space
+    Ray localRay = WorldToLocalRay(worldRay, Rinv, info.pos, info.scale);
 
-    Ray localRay = {localOrigin, localDirection};
+    // Perform intersection test in local space
+    HitInfo localHit = RayTriangleBVH(info.nodeIdx, localRay, nodeList,
+                                      triangles);
 
-    // iterate triangles in this mesh (triangles are expected in local space)
-    for (int i = 0; i < info.numTriangles; ++i) {
-      int triIdx = (int)info.firstTriangleIdx + i;
-      Triangle tri = triangles[triIdx];
+    if (localHit.didHit) {
+      // Transform hit back to world space
+      HitInfo worldHit =
+          LocalToWorldHit(localHit, R, info.pos, info.scale, worldRay);
 
-      // RayTriangle should expect ray & tri in same (local) space
-      HitInfo hit = RayTriangle(localRay, tri);
-      if (!hit.didHit)
-        continue;
-
-      // hit.dst is distance along localRay.direction. Convert to world
-      // distance:
-      float worldDst = hit.dst * info.scale;
-
-      // skip if farther than current closest
-      if (closestHit.didHit && worldDst >= closestHit.dst)
-        continue;
-
-      // transform local hit point back to world:
-      // scale then rotate then translate: world = R * (local * scale) + pos
-      float3 scaledLocalPoint = hit.hitPoint * info.scale;
-      float3 worldPoint = mul_mat_vec(R, scaledLocalPoint) + info.pos;
-
-      // transform normal: normals are rotated by R only (no scale)
-      float3 worldNormal = normalize(mul_mat_vec(R, hit.normal));
-
-      // populate hit info in world space
-      HitInfo worldHit;
-      worldHit.didHit = true;
-      worldHit.dst = worldDst;
-      worldHit.hitPoint = worldPoint;
-      worldHit.normal = worldNormal;
-      worldHit.material = info.material;
-
-      // accept as closest
-      closestHit = worldHit;
-    } // tri loop
-  } // mesh loop
+      // Update closest hit if this is closer
+      if (worldHit.dst < closestHit.dst) {
+        worldHit.material = info.material;
+        closestHit = worldHit;
+      }
+    }
+  }
 
   return closestHit;
 }
 
-Ray MakeRay(CameraInformation camInfo, float2 uv) {
-  float2 ndc =
-      (uv * 2.0f -
-       (float2)(1.0f, 1.0f));    // Convert from UV [0 - 1] to NDC [-1 - 1]
-  ndc[0] *= camInfo.aspectRatio; // Adjust for aspect ratio
-  float scale = tan(radians(camInfo.fov * 0.5f));
-  float3 rayDirCameraSpace =
-      normalize((float3)(ndc[0] * scale, ndc[1] * scale, 1.0f));
-  float cx = native_cos(camInfo.pitch), sx = native_sin(camInfo.pitch);
-  float cy = native_cos(camInfo.yaw), sy = native_sin(camInfo.yaw);
-  float cz = native_cos(camInfo.roll), sz = native_sin(camInfo.roll);
-
-  float3x3 rotation = {
-      (float3)(cy * cz, cz * sy * sx - cx * sz, sx * sz + cx * cz * sy),
-      (float3)(cy * sz, cx * cz + sx * sy * sz, cx * sy * sz - cz * sx),
-      (float3)(-sy, cy * sx, cx * cy)};
-  // Multiply matrices: rotation * rayDirCameraSpace
-  float3 rayDirWorldSpace =
-      normalize((float3)(dot(rotation.s0, rayDirCameraSpace),
-                         dot(rotation.s1, rayDirCameraSpace),
-                         dot(rotation.s2, rayDirCameraSpace)));
-  Ray ray;
-  ray.origin = camInfo.position;
-  ray.direction = rayDirWorldSpace;
-  return ray;
-}
-
-float3 lerp3(float3 a, float3 b, float t) { return a * (1.0f - t) + b * t; }
-
-float lerp(float a, float b, float t) { return a * (1.0f - t) + b * t; }
-
-float2 mod2(float2 x, float2 y) { return x - y * floor(x / y); }
-
 float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
-             int meshCount, __global const Triangle *triangles) {
+             int meshCount, __global const Triangle *triangles,
+             __global const Node *nodeList) {
   float3 incomingLight = (float3)(0.0f, 0.0f, 0.0f);
   float3 throughput = (float3)(1.0f, 1.0f, 1.0f);
   for (uint bounce = 0; bounce < MaxBounceCount; ++bounce) {
     HitInfo hit =
-        CalculateRayCollisionWithTriangle(ray, meshes, meshCount, triangles);
+        CalculateRayCollisionWithTriangle(ray, meshes, meshCount, triangles,
+                                          nodeList);
+
     if (!hit.didHit) {
       // environment / background contribution (if any)
       // incomingLight += throughput * (float3)(0.2f,0.3f,0.5f); // if you want
@@ -411,10 +488,38 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
   return incomingLight;
 }
 
+Ray MakeRay(CameraInformation camInfo, float2 uv) {
+  float2 ndc =
+      (uv * 2.0f -
+       (float2)(1.0f, 1.0f));    // Convert from UV [0 - 1] to NDC [-1 - 1]
+  ndc[0] *= camInfo.aspectRatio; // Adjust for aspect ratio
+  float scale = tan(radians(camInfo.fov * 0.5f));
+  float3 rayDirCameraSpace =
+      normalize((float3)(ndc[0] * scale, ndc[1] * scale, 1.0f));
+  float cx = native_cos(camInfo.pitch), sx = native_sin(camInfo.pitch);
+  float cy = native_cos(camInfo.yaw), sy = native_sin(camInfo.yaw);
+  float cz = native_cos(camInfo.roll), sz = native_sin(camInfo.roll);
+
+  float3x3 rotation = {
+      (float3)(cy * cz, cz * sy * sx - cx * sz, sx * sz + cx * cz * sy),
+      (float3)(cy * sz, cx * cz + sx * sy * sz, cx * sy * sz - cz * sx),
+      (float3)(-sy, cy * sx, cx * cy)};
+  // Multiply matrices: rotation * rayDirCameraSpace
+  float3 rayDirWorldSpace =
+      normalize((float3)(dot(rotation.s0, rayDirCameraSpace),
+                         dot(rotation.s1, rayDirCameraSpace),
+                         dot(rotation.s2, rayDirCameraSpace)));
+  Ray ray;
+  ray.origin = camInfo.position;
+  ray.direction = rayDirWorldSpace;
+  return ray;
+}
+
 __kernel void raytrace(__global const MeshInfo *meshes,
                        __global const Triangle *triangles, int meshCount,
                        __global uchar4 *image, int width, int height,
-                       CameraInformation camInfo, int frameIndex) {
+                       CameraInformation camInfo, int frameIndex,
+                       __global const Node *nodeList) {
   uint x = get_global_id(0);
   uint y = get_global_id(1);
   uint pixelIndex = y * width + x;
@@ -426,7 +531,7 @@ __kernel void raytrace(__global const MeshInfo *meshes,
 
   float3 accum = (float3)(0.0f, 0.0f, 0.0f);
   for (uint s = 0; s < IncomingRaysPerPixel; ++s) {
-    accum += Trace(ray, &rngState, meshes, meshCount, triangles);
+    accum += Trace(ray, &rngState, meshes, meshCount, triangles, nodeList);
   }
   float3 pixelColor = accum / (float)IncomingRaysPerPixel;
 
@@ -436,6 +541,7 @@ __kernel void raytrace(__global const MeshInfo *meshes,
   pixelColor = native_powr(pixelColor, (float3)(1.0f / 2.2f));
 
   image[pixelIndex] =
-      (uchar4)((uchar)(pixelColor.x * 255.0f), (uchar)(pixelColor.y * 255.0f),
+      (uchar4)((uchar)(pixelColor.x * 255.0f), (uchar)(pixelColor.y *
+      255.0f),
                (uchar)(pixelColor.z * 255.0f), 255u);
 }
