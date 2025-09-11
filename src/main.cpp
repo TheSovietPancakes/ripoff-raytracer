@@ -40,7 +40,8 @@
 #define WIDTH 500
 #define HEIGHT WIDTH
 // The path, absolute or relative (to the cwd), to the .obj file to load.
-#define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/dragon.obj"
+// #define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/dragon.obj"
+#define OBJECT_PATH "C:/Users/Soviet Pancakes/Desktop/code/raytracer/dragon.obj"
 // How much space there is inside the Cornell box between the model and the walls
 #define CORNELL_BREATHING_ROOM 200.0f
 
@@ -133,8 +134,12 @@ int main() {
     std::cerr << "Failed to get OpenCL platform IDs\n";
     return 1;
   }
-  cl_platform_id platform = platforms[0]; // Pick one lol
 
+  cl_platform_id platform = platforms[0]; // Pick one lol
+  char version[128];
+  clGetPlatformInfo(platform, CL_PLATFORM_VERSION, sizeof(version), version, nullptr);
+  std::cout << "OpenCL Version: " << version << std::endl;
+  
   cl_uint numDevices;
   err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
   if (err != CL_SUCCESS) {
@@ -192,7 +197,7 @@ int main() {
     clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
     std::vector<char> log(logSize);
     clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, logSize, log.data(), nullptr);
-    std::cerr << "Build log:\n" << log.data() << "\n";
+    std::cerr << "Build log:\n" << log.data() << std::endl;
     return 1;
   }
 
@@ -221,43 +226,13 @@ int main() {
   // mesh.scale = 0.5f;
 
   // Add a light-emitting triangle underneath the dragon
-  auto addQuad = [&](cl_float3 a, cl_float3 b, cl_float3 c, cl_float3 d, cl_float3 normal, cl_float3 color) {
-    Node n = {
-        .bounds =
-            {
-                .min = {fminf(fminf(a.x, b.x), fminf(c.x, d.x)), fminf(fminf(a.y, b.y), fminf(c.y, d.y)), fminf(fminf(a.z, b.z), fminf(c.z, d.z))},
-                .max = {fmaxf(fmaxf(a.x, b.x), fmaxf(c.x, d.x)), fmaxf(fmaxf(a.y, b.y), fmaxf(c.y, d.y)), fmaxf(fmaxf(a.z, b.z), fmaxf(c.z, d.z))},
-            },
-        .childIndex = 0,
-        .firstTriangleIdx = (cl_uint)triangleList.size(),
-        .numTriangles = 2,
-    };
-    nodeList.push_back(n);
-    // SplitBVH(nodeList.size() - 1);
-    SplitBVH(nodeList.back());
-    MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
-                         .material = {
-                             .type = MaterialType_Solid,
-                             .color = color,
-                             .emissionColor = {0, 0, 0},
-                             .emissionStrength = 0.0f,
-                             .reflectiveness = 0.0f,
-                             .specularProbability = 1.0f,
-                         }};
-
-    // two triangles
-    triangleList.push_back({a, b, c, normal, normal, normal});
-    triangleList.push_back({a, c, d, normal, normal, normal});
-    meshList.push_back(quadMesh);
-  };
-
   float minX = nodeList[mesh.nodeIdx].bounds.min.x - CORNELL_BREATHING_ROOM, maxX = nodeList[mesh.nodeIdx].bounds.max.x + CORNELL_BREATHING_ROOM;
   float minY = nodeList[mesh.nodeIdx].bounds.min.y,
         maxY = nodeList[mesh.nodeIdx].bounds.max.y + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
   float minZ = nodeList[mesh.nodeIdx].bounds.min.z - CORNELL_BREATHING_ROOM, maxZ = nodeList[mesh.nodeIdx].bounds.max.z + CORNELL_BREATHING_ROOM;
 
   // Floor (Y = minY)
-  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, {0, 1, 0}, {0.0f, 0.8f, 0.0f});
+  addQuad(cl_float3 {minX, minY, minZ}, cl_float3 {maxX, minY, minZ}, cl_float3 {maxX, minY, maxZ}, cl_float3 {minX, minY, maxZ}, cl_float3 {0, 1, 0}, cl_float3 {0.0f, 0.8f, 0.0f});
   meshList.back().material = {
       .type = MaterialType_Checker,
       .color = {0.1, 0.1, 0.1},
@@ -303,7 +278,7 @@ int main() {
   std::cout << " done in " << std::chrono::duration_cast<std::chrono::milliseconds>(triangleEndTime - triangleStart).count() << " ms ("
             << triangleList.size() << ").";
   std::cout << "\nLoading mesh info..." << std::flush;
-  meshList.push_back(mesh);
+  meshList.emplace_back(mesh);
   std::chrono::high_resolution_clock::time_point meshEndTime = std::chrono::high_resolution_clock::now();
   std::cout << " done in " << std::chrono::duration_cast<std::chrono::milliseconds>(meshEndTime - triangleEndTime).count() << " ms ("
             << meshList.size() << ")." << std::endl;
@@ -458,27 +433,27 @@ int main() {
       // --- Run kernel with a seed derived from numFrames
       err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        std::cerr << "Failed to set kernel arg: " << err << std::endl;
         break;
       }
       err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        std::cerr << "Failed to set kernel arg: " << err << std::endl;
         break;
       }
       err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to enqueue kernel: " << err << "\n";
+        std::cerr << "Failed to enqueue kernel: " << err << std::endl;
         break;
       }
       err = clFinish(queue); // safer than flush when reading back
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to finish command queue: " << err << "\n";
+        std::cerr << "Failed to finish command queue: " << err << std::endl;
         break;
       }
       err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to read buffer: " << err << "\n";
+        std::cerr << "Failed to read buffer: " << err << std::endl;
         break;
       }
       for (size_t i = 0; i < pixels.size(); ++i) {
@@ -550,25 +525,25 @@ int main() {
       // Update camera info arg
       err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        std::cerr << "Failed to set kernel arg: " << err << std::endl;
         break;
       }
       err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << "\n";
+        std::cerr << "Failed to set kernel arg: " << err << std::endl;
         break;
       }
       // Enqueue kernel
       err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to enqueue kernel: " << err << "\n";
+        std::cerr << "Failed to enqueue kernel: " << err << std::endl;
         break;
       }
 
       // Make sure commands have been submitted to the device
       err = clFlush(queue);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to flush command queue: " << err << "\n";
+        std::cerr << "Failed to flush command queue: " << err << std::endl;
         break;
       }
 
@@ -579,7 +554,7 @@ int main() {
 
       err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, bytesToRead, pixels.data(), 0, nullptr, nullptr);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to read buffer: " << err << "\n";
+        std::cerr << "Failed to read buffer: " << err << std::endl;
         break;
       }
       // Upload to the bound OpenGL texture (bind to be explicit)
@@ -621,7 +596,7 @@ int main() {
 
     err = clFinish(queue);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to finish command queue: " << err << "\n";
+      std::cerr << "Failed to finish command queue: " << err << std::endl;
       return 1;
     }
   }
@@ -680,30 +655,30 @@ int main() {
         std::cout << std::flush;
         err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg: " << err << "\n";
+          std::cerr << "Failed to set kernel arg: " << err << std::endl;
           return 1;
         }
         err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg: " << err << "\n";
+          std::cerr << "Failed to set kernel arg: " << err << std::endl;
           return 1;
         }
         err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to enqueue kernel: " << err << "\n";
+          std::cerr << "Failed to enqueue kernel: " << err << std::endl;
           return 1;
         }
         tileIndex++;
         err = clFinish(queue); // safer than flush when reading back
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to finish command queue: " << err << "\n";
+          std::cerr << "Failed to finish command queue: " << err << std::endl;
           return 1;
         }
       }
     }
     err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to read buffer: " << err << "\n";
+      std::cerr << "Failed to read buffer: " << err << std::endl;
       return 1;
     }
 
@@ -751,37 +726,37 @@ int main() {
 #endif
   err = clReleaseMemObject(meshBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release mesh buffer: " << err << "\n";
+    std::cerr << "Failed to release mesh buffer: " << err << std::endl;
     return 1;
   }
   err = clReleaseMemObject(triangleBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release triangle buffer: " << err << "\n";
+    std::cerr << "Failed to release triangle buffer: " << err << std::endl;
     return 1;
   }
   err = clReleaseMemObject(imageBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release image buffer: " << err << "\n";
+    std::cerr << "Failed to release image buffer: " << err << std::endl;
     return 1;
   }
   err = clReleaseKernel(kernel);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release kernel: " << err << "\n";
+    std::cerr << "Failed to release kernel: " << err << std::endl;
     return 1;
   }
   err = clReleaseProgram(program);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release program: " << err << "\n";
+    std::cerr << "Failed to release program: " << err << std::endl;
     return 1;
   }
   err = clReleaseCommandQueue(queue);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release command queue: " << err << "\n";
+    std::cerr << "Failed to release command queue: " << err << std::endl;
     return 1;
   }
   err = clReleaseContext(ctx);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release context: " << err << "\n";
+    std::cerr << "Failed to release context: " << err << std::endl;
     return 1;
   }
 #ifndef RENDER_AND_GET_OUT

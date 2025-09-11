@@ -1,11 +1,11 @@
 // Render quality
-__constant uint IncomingRaysPerPixel = 100;
-__constant uint MaxBounceCount = 30;
-__constant uint BVHStackSize = 64;
+#define IncomingRaysPerPixel 100
+#define MaxBounceCount 30
+#define BVHStackSize 64
 
 // Math
-__constant float tau = 6.28318530717958647692f; // 2pi
-__constant float EPSILON = 1e-6f; // Tiny number for finding precision errors
+#define tau 6.28318530717958647692f // 2pi
+#define EPSILON 1e-6f // Tiny number for finding precision errors
 
 typedef struct {
   float3 min;
@@ -253,8 +253,6 @@ float3 SampleHemisphereCosine(float3 n, __private uint *state) {
 }
 
 inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
-  const float EPSILON = 1e-6f;
-
   float3 edge1 = tri.posB - tri.posA;
   float3 edge2 = tri.posC - tri.posA;
 

@@ -139,7 +139,7 @@ float EvaluateSplit(const Node& node, int splitAxis, float splitPos) {
   BoundingBox boxA, boxB;
   int numInA = 0, numInB = 0;
 
-  for (int i = node.firstTriangleIdx; i < node.firstTriangleIdx + node.numTriangles; i++) {
+  for (size_t i = node.firstTriangleIdx; i < node.firstTriangleIdx + node.numTriangles; i++) {
     float3 centroid = CalculateTriangleCentroid(triangleList[i]);
     if (centroid.s[splitAxis] < splitPos) {
       GrowToInclude(boxA, triangleList[i]);
@@ -255,7 +255,7 @@ void SplitBVH(Node& parent, int depth = 10) {
   // Create child nodes
   parent.childIndex = nodeList.size();
 
-  Node childA = {.childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx, .numTriangles = leftCount};
+  Node childA = { .childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx, .numTriangles = leftCount};
 
   Node childB = {.childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx + leftCount, .numTriangles = parent.numTriangles - leftCount};
 
@@ -269,8 +269,8 @@ void SplitBVH(Node& parent, int depth = 10) {
     GrowToInclude(childB.bounds, triangleList[childB.firstTriangleIdx + i]);
   }
 
-  nodeList.push_back(childA);
-  nodeList.push_back(childB);
+  nodeList.emplace_back(childA);
+  nodeList.emplace_back(childB);
 
   // Recursively split children
   SplitBVH(nodeList[parent.childIndex], depth - 1);
@@ -304,12 +304,12 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
     if (line.substr(0, 2) == "v ") { // vertex
       cl_float3 vertex;
       if (sscanf(line.c_str(), "v %f %f %f", &vertex.x, &vertex.y, &vertex.z) == 3) {
-        temp_vertices.push_back(vertex);
+        temp_vertices.emplace_back(vertex);
       }
     } else if (line.substr(0, 3) == "vn ") { // vertex normal
       cl_float3 normal;
       if (sscanf(line.c_str(), "vn %f %f %f", &normal.x, &normal.y, &normal.z) == 3) {
-        temp_normals.push_back(normal);
+        temp_normals.emplace_back(normal);
       }
     } else if (line.substr(0, 2) == "f ") { // face
       cl_uint vIdx[3], vtIdx[3], nIdx[3];
@@ -350,14 +350,14 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
       tri.normalB = temp_normals[nIdx[1]];
       tri.normalC = temp_normals[nIdx[2]];
 
-      triangleList.push_back(tri);
+      triangleList.emplace_back(tri);
     }
   }
   file.close();
   size_t firstTriangleIdx = triangleList.size() - (triCount);
   size_t numTriangles = triCount;
   Node c = {
-      .childIndex = 0,
+      .childIndex = nodeList.size() + 1, // will be correct after pushing this here node
       .firstTriangleIdx = firstTriangleIdx,
       .numTriangles = numTriangles,
   };
@@ -373,10 +373,10 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
   }
   meshCaches[filename] = c;
   size_t rootIdx = nodeList.size();
-  nodeList.push_back(c);
+  nodeList.emplace_back(c);
   // SplitBVH(rootIdx, 32);
-  SplitBVH(nodeList[rootIdx], 64);
-  PrintDebugBVH(rootIdx);
+  SplitBVH(c, 64);
+  // PrintDebugBVH(rootIdx);
   return MeshInfo{
       .nodeIdx = rootIdx,
       .pitch = 0.0f,
@@ -385,3 +385,33 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
       .scale = 1.0f,
       .material = {.type = MaterialType_Solid, .color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
 }
+
+void addQuad(cl_float3 a, cl_float3 b, cl_float3 c, cl_float3 d, cl_float3 normal, cl_float3 color) {
+  Node n = {
+      .bounds =
+          {
+              .min = {fminf(fminf(a.x, b.x), fminf(c.x, d.x)), fminf(fminf(a.y, b.y), fminf(c.y, d.y)), fminf(fminf(a.z, b.z), fminf(c.z, d.z))},
+              .max = {fmaxf(fmaxf(a.x, b.x), fmaxf(c.x, d.x)), fmaxf(fmaxf(a.y, b.y), fmaxf(c.y, d.y)), fmaxf(fmaxf(a.z, b.z), fmaxf(c.z, d.z))},
+          },
+      .childIndex = 0,
+      .firstTriangleIdx = (cl_uint)triangleList.size(),
+      .numTriangles = 2,
+  };
+  nodeList.emplace_back(n);
+  // SplitBVH(nodeList.size() - 1);
+  SplitBVH(nodeList.back());
+  MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
+                        .material = {
+                            .type = MaterialType_Solid,
+                            .color = color,
+                            .emissionColor = {0, 0, 0},
+                            .emissionStrength = 0.0f,
+                            .reflectiveness = 0.0f,
+                            .specularProbability = 1.0f,
+                        }};
+
+  // two triangles
+  triangleList.emplace_back(Triangle {a, b, c, normal, normal, normal});
+  triangleList.emplace_back(Triangle {a, c, d, normal, normal, normal});
+    meshList.emplace_back(quadMesh);
+  };
