@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <functional>
+
 using float3 = cl_float3;
 
 std::ostream& operator<<(std::ostream& os, const float3& v) {
@@ -64,6 +66,7 @@ typedef struct {
   float3 emissionColor;
   float emissionStrength;
   float reflectiveness;
+  float specularProbability; // 0.0 = diffuse, 1.0 = perfect mirror
 } RayTracingMaterial;
 
 typedef struct {
@@ -181,6 +184,37 @@ SplitAxisAndPos ChooseSplitAxisAndPosition(const Node& node) {
   // float splitPos = parent.bounds.min.s[longestAxis] + size.s[longestAxis] * 0.5f;
 
   // return {longestAxis, splitPos, 0.0f};
+}
+
+void PrintDebugBVH(size_t rootNodeIdx) {
+  float averageTrianglesPerLeaf = 0.0f;
+  size_t leafCount = 0;
+  size_t internalNodeCount = 0;
+  size_t maxDepth = 0;
+  std::function<void(size_t, size_t)> recurse = [&](size_t nodeIdx, size_t depth) {
+    if (nodeIdx >= nodeList.size()) {
+      std::cerr << "Invalid node index: " << nodeIdx << "\n";
+      return;
+    }
+    const Node& node = nodeList[nodeIdx];
+    if (node.numTriangles > 0 && node.childIndex == 0) {
+      // Leaf node
+      leafCount++;
+      averageTrianglesPerLeaf += node.numTriangles;
+      if (depth > maxDepth)
+        maxDepth = depth;
+    } else {
+      // Internal node
+      internalNodeCount++;
+      recurse(node.childIndex, depth + 1);
+      recurse(node.childIndex + 1, depth + 1);
+    }
+  };
+  recurse(rootNodeIdx, 1);
+  if (leafCount > 0)
+    averageTrianglesPerLeaf /= leafCount;
+  std::cout << "BVH Stats: " << leafCount << " leaf nodes, " << internalNodeCount << " internal nodes, average " << averageTrianglesPerLeaf
+            << " triangles per leaf, max depth " << maxDepth << "\n";
 }
 
 void SplitBVH(Node& parent, int depth = 10) {
@@ -342,6 +376,7 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
   nodeList.push_back(c);
   // SplitBVH(rootIdx, 32);
   SplitBVH(nodeList[rootIdx], 64);
+  PrintDebugBVH(rootIdx);
   return MeshInfo{
       .nodeIdx = rootIdx,
       .pitch = 0.0f,

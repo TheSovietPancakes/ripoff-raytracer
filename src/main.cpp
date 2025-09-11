@@ -26,7 +26,7 @@
 #define CAMERA_START_ROLL 0.0f
 // On each frame, the pRNG's seed is different, and all frames are averaged together to produce a less noisy image.
 // Obviously, the higher this is, the longer yet higher quality the render will be.
-#define FRAME_TOTAL 10
+#define FRAME_TOTAL 1
 // Functionally equivalent to FRAME_TOTAL, but when RENDER_AND_GET_OUT is NOT defined,
 // this is how many times pixels are averaged before 1 frame is sent to the window.
 // #define RAYS_PER_PIXEL 1 // unimplemented - open Trace.cl
@@ -38,7 +38,7 @@
 // #define HEIGHT 2556
 
 #define WIDTH 500
-#define HEIGHT 500
+#define HEIGHT WIDTH
 // The path, absolute or relative (to the cwd), to the .obj file to load.
 #define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/dragon.obj"
 // How much space there is inside the Cornell box between the model and the walls
@@ -205,11 +205,16 @@ int main() {
   std::cout << "Loading triangles from mesh..." << std::flush;
   MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
   mesh.material = {
-      .type = MaterialType_Solid, .color = {0.8f, 0.8f, 0.8f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f, .reflectiveness = 0.0f,
-      //  .specularProbability = 0.0f,
+      .type = MaterialType_Solid,
+      .color = {0.7f, 0.7f, 0.7f},
+      .emissionColor = {0.0f, 0.0f, 0.0f},
+      .emissionStrength = 0.0f,
+      .reflectiveness = 0.0f,
+      .specularProbability = 0.0f,
   };
-  mesh.pos.y += 80.0f;
+  mesh.pos.y += 60.0f;
   mesh.scale = 200.0f;
+  // mesh.scale = 0.5f;
   mesh.yaw = 1.5f;
   // mesh.material = {.color = {0.8f, 0.8f, 0.8f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 10.0f};
   // mesh.yaw = 0.5f;
@@ -232,8 +237,12 @@ int main() {
     SplitBVH(nodeList.back());
     MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
                          .material = {
-                             .type = MaterialType_Solid, .color = color, .emissionColor = {0, 0, 0}, .emissionStrength = 0.0f, .reflectiveness = 0.0f,
-                             // .specularProbability = 0.0f,
+                             .type = MaterialType_Solid,
+                             .color = color,
+                             .emissionColor = {0, 0, 0},
+                             .emissionStrength = 0.0f,
+                             .reflectiveness = 0.0f,
+                             .specularProbability = 1.0f,
                          }};
 
     // two triangles
@@ -250,8 +259,12 @@ int main() {
   // Floor (Y = minY)
   addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, {0, 1, 0}, {0.0f, 0.8f, 0.0f});
   meshList.back().material = {
-      .type = MaterialType_Checker, .color = {0.1, 0.1, 0.1}, .emissionColor = {0.8, 0.8, 0.8}, .emissionStrength = 40.0f, .reflectiveness = 1.0f,
-      // .specularProbability = 0.0f,
+      .type = MaterialType_Checker,
+      .color = {0.1, 0.1, 0.1},
+      .emissionColor = {0.8, 0.8, 0.8},
+      .emissionStrength = 40.0f,
+      .reflectiveness = 1.0f,
+      .specularProbability = 0.0f,
   };
 
   // Ceiling (Y = maxY)
@@ -273,7 +286,12 @@ int main() {
   // Light quad on ceiling
   float lx = 50, lz = 50, ly = maxY - 1; // just below ceiling
   addQuad({-lx, ly, -lz}, {lx, ly, -lz}, {lx, ly, lz}, {-lx, ly, lz}, {0, -1, 0}, {0.0f, 0.0f, 0.0f});
-  meshList.back().material = {MaterialType_Solid, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, 34.0f, 0.0f};
+  meshList.back().material = {.type = MaterialType_Solid,
+                              .color = {0.0f, 0.0f, 0.0f},
+                              .emissionColor = {1.0f, 1.0f, 1.0f},
+                              .emissionStrength = 25.0f,
+                              .reflectiveness = 0.0f,
+                              .specularProbability = 1};
 
   cl_mem triangleBuffer =
       clCreateBuffer(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, triangleList.size() * sizeof(Triangle), triangleList.data(), &err);
@@ -303,9 +321,9 @@ int main() {
   gpuNodes.resize(nodeList.size());
   for (size_t i = 0; i < nodeList.size(); ++i) {
     GPUNode n = {
-      .bounds = nodeList[i].bounds,
-      .index = nodeList[i].childIndex == 0 ? nodeList[i].firstTriangleIdx : nodeList[i].childIndex,
-      .numTriangles = nodeList[i].childIndex == 0 ? nodeList[i].numTriangles : 0,
+        .bounds = nodeList[i].bounds,
+        .index = nodeList[i].childIndex == 0 ? nodeList[i].firstTriangleIdx : nodeList[i].childIndex,
+        .numTriangles = nodeList[i].childIndex == 0 ? nodeList[i].numTriangles : 0,
     };
     gpuNodes[i] = n;
   }

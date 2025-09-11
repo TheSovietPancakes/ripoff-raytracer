@@ -1,6 +1,6 @@
 // Render quality
-__constant uint IncomingRaysPerPixel = 300;
-__constant uint MaxBounceCount = 10;
+__constant uint IncomingRaysPerPixel = 100;
+__constant uint MaxBounceCount = 30;
 __constant uint BVHStackSize = 64;
 
 // Math
@@ -14,7 +14,8 @@ typedef struct {
 
 typedef struct {
   BoundingBox bounds;
-  ulong index; // If this is a leaf node, then its the FIRST_TRI_INDEX. otherwise it is CHILD_INDEX.
+  ulong index; // If this is a leaf node, then its the FIRST_TRI_INDEX.
+               // otherwise it is CHILD_INDEX.
   ulong numTriangles;
 } Node;
 
@@ -36,7 +37,8 @@ typedef struct {
   float3 color;
   float3 emissionColor;
   float emissionStrength;
-  float reflectiveness; // 0-1
+  float reflectiveness;
+  float specularProbability; // 0.0 = diffuse, 1.0 = perfect mirror
 } RayTracingMaterial;
 
 typedef struct {
@@ -318,8 +320,10 @@ HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
     float dist;
   } BVHStackEntry;
 
-  private BVHStackEntry stack[BVHStackSize];
-  private size_t stackPtr = 0;
+private
+  BVHStackEntry stack[BVHStackSize];
+private
+  size_t stackPtr = 0;
   float distToRoot;
   if (!RayBoundingBox(ray, nodeList[nodeIdx].bounds.min,
                       nodeList[nodeIdx].bounds.max, &distToRoot)) {
