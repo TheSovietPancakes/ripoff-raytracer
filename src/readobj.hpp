@@ -15,23 +15,32 @@
 
 using float3 = cl_float3;
 
+
 std::ostream& operator<<(std::ostream& os, const float3& v) {
-  os << "(" << v.x << ", " << v.y << ", " << v.z << ")";
+  os << "(" << v.s[0] << ", " << v.s[1] << ", " << v.s[2] << ")";
   return os;
 }
 using float4 = cl_float4;
 
 // Commented out because float3 is just an alias of float4
 // std::ostream& operator<<(std::ostream& os, const float4& v) {
-//   os << "(" << v.x << ", " << v.y << ", " << v.z << ", " << v.w << ")";
+//   os << "(" << v.s[0] << ", " << v.s[1] << ", " << v.s[2] << ", " << v.w << ")";
 //   return os;
 // }
 
-cl_float3 operator+(const cl_float3& a, const cl_float3& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
-cl_float3 operator-(const cl_float3& a, const cl_float3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-cl_float3 operator*(const cl_float3& a, const cl_float3& b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
-cl_float3 operator*(const cl_float3& a, float b) { return {a.x * b, a.y * b, a.z * b}; }
-cl_float3 operator/(const cl_float3& a, float b) { return {a.x / b, a.y / b, a.z / b}; }
+float3 operator+(const float3& a, const float3& b) {
+  return {a.s[0] + b.s[0], a.s[1] + b.s[1], a.s[2] + b.s[2]};
+}
+
+float3 operator-(const float3& a, const float3& b) {
+  return {a.s[0] - b.s[0], a.s[1] - b.s[1], a.s[2] - b.s[2]};
+}
+float3 operator*(const float3& a, const float b) {
+  return {a.s[0] * b, a.s[1] * b, a.s[2] * b};
+}
+float3 operator/(const float3& a, const float b) {
+  return {a.s[0] / b, a.s[1] / b, a.s[2] / b};
+}
 
 typedef struct {
   float3 min = {CL_FLT_MAX, CL_FLT_MAX, CL_FLT_MAX};
@@ -108,12 +117,12 @@ std::vector<Triangle> triangleList = {};
 std::vector<Node> nodeList = {};
 
 void GrowToInclude(BoundingBox& box, const float3& point) {
-  box.min.x = std::min(box.min.x, point.x);
-  box.min.y = std::min(box.min.y, point.y);
-  box.min.z = std::min(box.min.z, point.z);
-  box.max.x = std::max(box.max.x, point.x);
-  box.max.y = std::max(box.max.y, point.y);
-  box.max.z = std::max(box.max.z, point.z);
+  box.min.s[0] = std::min(box.min.s[0], point.s[0]);
+  box.min.s[1] = std::min(box.min.s[1], point.s[1]);
+  box.min.s[2] = std::min(box.min.s[2], point.s[2]);
+  box.max.s[0] = std::max(box.max.s[0], point.s[0]);
+  box.max.s[1] = std::max(box.max.s[1], point.s[1]);
+  box.max.s[2] = std::max(box.max.s[2], point.s[2]);
 }
 
 void GrowToInclude(BoundingBox& box, const Triangle& tri) {
@@ -130,8 +139,8 @@ typedef struct {
   float cost;
 } SplitAxisAndPos;
 
-float NodeCost(cl_float3 size, int numTriangles) {
-  float halfArea = size.x * (size.y + size.z) + size.y * size.z;
+float NodeCost(float3 size, int numTriangles) {
+  float halfArea = size.s[0] * (size.s[1] + size.s[2]) + size.s[1] * size.s[2];
   return halfArea * numTriangles;
 }
 
@@ -179,9 +188,9 @@ SplitAxisAndPos ChooseSplitAxisAndPosition(const Node& node) {
   // Use the midpoint along the longest axis as the split position
   // cl_float3 size = parent.bounds.max - parent.bounds.min;
   // int longestAxis = 0;
-  // if (size.y > size.x) longestAxis = 1;
-  // if (size.z > size.s[longestAxis]) longestAxis = 2;
-  // float splitPos = parent.bounds.min.s[longestAxis] + size.s[longestAxis] * 0.5f;
+  // if (size.s[1] > size.s[0]) longestAxis = 1;
+  // if (size.s[2] > size[longestAxis]) longestAxis = 2;
+  // float splitPos = parent.bounds.min[longestAxis] + size[longestAxis] * 0.5f;
 
   // return {longestAxis, splitPos, 0.0f};
 }
@@ -292,8 +301,8 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
     exit(1);
   }
 
-  std::vector<cl_float3> temp_vertices;
-  std::vector<cl_float3> temp_normals;
+  std::vector<float3> temp_vertices;
+  std::vector<float3> temp_normals;
 
   std::string line;
   int triCount = 0;
@@ -302,13 +311,13 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
       continue;
 
     if (line.substr(0, 2) == "v ") { // vertex
-      cl_float3 vertex;
-      if (sscanf(line.c_str(), "v %f %f %f", &vertex.x, &vertex.y, &vertex.z) == 3) {
+      float3 vertex;
+      if (sscanf(line.c_str(), "v %f %f %f", &vertex.s[0], &vertex.s[1], &vertex.s[2]) == 3) {
         temp_vertices.emplace_back(vertex);
       }
     } else if (line.substr(0, 3) == "vn ") { // vertex normal
-      cl_float3 normal;
-      if (sscanf(line.c_str(), "vn %f %f %f", &normal.x, &normal.y, &normal.z) == 3) {
+      float3 normal;
+      if (sscanf(line.c_str(), "vn %f %f %f", &normal.s[0], &normal.s[1], &normal.s[2]) == 3) {
         temp_normals.emplace_back(normal);
       }
     } else if (line.substr(0, 2) == "f ") { // face
@@ -364,12 +373,12 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
   // Calculate bounds
   for (size_t tri = 0; tri < numTriangles; ++tri) {
     Triangle& t = triangleList[firstTriangleIdx + tri];
-    c.bounds.min.x = std::min(c.bounds.min.x, std::min(t.posA.x, std::min(t.posB.x, t.posC.x)));
-    c.bounds.min.y = std::min(c.bounds.min.y, std::min(t.posA.y, std::min(t.posB.y, t.posC.y)));
-    c.bounds.min.z = std::min(c.bounds.min.z, std::min(t.posA.z, std::min(t.posB.z, t.posC.z)));
-    c.bounds.max.x = std::max(c.bounds.max.x, std::max(t.posA.x, std::max(t.posB.x, t.posC.x)));
-    c.bounds.max.y = std::max(c.bounds.max.y, std::max(t.posA.y, std::max(t.posB.y, t.posC.y)));
-    c.bounds.max.z = std::max(c.bounds.max.z, std::max(t.posA.z, std::max(t.posB.z, t.posC.z)));
+    c.bounds.min.s[0] = std::min(c.bounds.min.s[0], std::min(t.posA.s[0], std::min(t.posB.s[0], t.posC.s[0])));
+    c.bounds.min.s[1] = std::min(c.bounds.min.s[1], std::min(t.posA.s[1], std::min(t.posB.s[1], t.posC.s[1])));
+    c.bounds.min.s[2] = std::min(c.bounds.min.s[2], std::min(t.posA.s[2], std::min(t.posB.s[2], t.posC.s[2])));
+    c.bounds.max.s[0] = std::max(c.bounds.max.s[0], std::max(t.posA.s[0], std::max(t.posB.s[0], t.posC.s[0])));
+    c.bounds.max.s[1] = std::max(c.bounds.max.s[1], std::max(t.posA.s[1], std::max(t.posB.s[1], t.posC.s[1])));
+    c.bounds.max.s[2] = std::max(c.bounds.max.s[2], std::max(t.posA.s[2], std::max(t.posB.s[2], t.posC.s[2])));
   }
   meshCaches[filename] = c;
   size_t rootIdx = nodeList.size();
@@ -386,12 +395,12 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
       .material = {.type = MaterialType_Solid, .color = {1.0f, 1.0f, 1.0f}, .emissionColor = {0.0f, 0.0f, 0.0f}, .emissionStrength = 0.0f}};
 }
 
-void addQuad(cl_float3 a, cl_float3 b, cl_float3 c, cl_float3 d, cl_float3 normal, cl_float3 color) {
+void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color) {
   Node n = {
       .bounds =
           {
-              .min = {fminf(fminf(a.x, b.x), fminf(c.x, d.x)), fminf(fminf(a.y, b.y), fminf(c.y, d.y)), fminf(fminf(a.z, b.z), fminf(c.z, d.z))},
-              .max = {fmaxf(fmaxf(a.x, b.x), fmaxf(c.x, d.x)), fmaxf(fmaxf(a.y, b.y), fmaxf(c.y, d.y)), fmaxf(fmaxf(a.z, b.z), fmaxf(c.z, d.z))},
+              .min = {fminf(fminf(a.s[0], b.s[0]), fminf(c.s[0], d.s[0])), fminf(fminf(a.s[1], b.s[1]), fminf(c.s[1], d.s[1])), fminf(fminf(a.s[2], b.s[2]), fminf(c.s[2], d.s[2]))},
+              .max = {fmaxf(fmaxf(a.s[0], b.s[0]), fmaxf(c.s[0], d.s[0])), fmaxf(fmaxf(a.s[1], b.s[1]), fmaxf(c.s[1], d.s[1])), fmaxf(fmaxf(a.s[2], b.s[2]), fmaxf(c.s[2], d.s[2]))},
           },
       .childIndex = 0,
       .firstTriangleIdx = (cl_uint)triangleList.size(),

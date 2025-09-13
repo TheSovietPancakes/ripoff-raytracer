@@ -6,34 +6,34 @@ project(gputest)
 
 # Find OpenCL from cmake/FindOpenCL.cmake
 find_package(OpenCL)
-if (NOT OpenCL_FOUND)
+if(NOT OpenCL_FOUND)
   # if windows
   message(STATUS "OpenCL not found via find_package, attempting manual search...")
-  if (WIN32)
+  if(WIN32)
     # Try to find common OpenCL.dll locations
     # C:/Program Files/OpenCL-SDK/<...>/
-    if (NOT EXISTS "C:/Program Files/OpenCL-SDK")
+    if(NOT EXISTS "C:/Program Files/OpenCL-SDK")
       message(FATAL_ERROR "OpenCL SDK not found in C:/Program Files/OpenCL-SDK. Please install OpenCL SDK.")
     endif()
-    
-    if (EXISTS "C:/Program Files/OpenCL-SDK/include/CL/cl.h")
+
+    if(EXISTS "C:/Program Files/OpenCL-SDK/include/CL/cl.h")
       message(STATUS "Found OpenCL headers in C:/Program Files/OpenCL-SDK/include")
       set(OpenCL_FOUND TRUE)
       set(OpenCL_INCLUDE_DIR "C:/Program Files/OpenCL-SDK/include")
       set(OpenCL_LIBRARY "C:/Program Files/OpenCL-SDK/lib/OpenCL.lib")
-      
+
       set(OpenCL_LIBRARIES ${OpenCL_LIBRARY})
       set(OpenCL_INCLUDE_DIRS ${OpenCL_INCLUDE_DIR})
     endif()
     # Go through each directory of OpenCL-SDK
     # On my system, there was a nested folder, so maybe
     # it's like this for you, too.
-    if (NOT OpenCL_FOUND)
+    if(NOT OpenCL_FOUND)
       file(GLOB OPENCL_SDK_DIRS "C:/Program Files/OpenCL-SDK/*")
 
       foreach(OPENCL_SDK_DIR ${OPENCL_SDK_DIRS})
         message(STATUS "Checking OpenCL SDK directory: ${OPENCL_SDK_DIR}")
-        if (EXISTS "${OPENCL_SDK_DIR}/include/CL/cl.h")
+        if(EXISTS "${OPENCL_SDK_DIR}/include/CL/cl.h")
           message(STATUS "Found OpenCL headers in ${OPENCL_SDK_DIR}/include")
           set(OpenCL_FOUND TRUE)
           set(OpenCL_INCLUDE_DIR "${OPENCL_SDK_DIR}/include")
@@ -46,7 +46,7 @@ if (NOT OpenCL_FOUND)
       endforeach()
     endif()
 
-    if (NOT OpenCL_FOUND)
+    if(NOT OpenCL_FOUND)
       message(FATAL_ERROR "OpenCL not found. Please install OpenCL SDK.")
     endif()
   endif()
@@ -76,8 +76,14 @@ target_link_libraries(${PROJECT_NAME} ${OpenCL_LIBRARIES})
 # target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW_CFLAGS_OTHER})
 
 # debug mode
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -lstdc++")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -lstdc++")
+if(CMAKE_COMPILER_IS_GNUCXX)
+  # libc++
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -std=c++17 -lc++")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -std=c++17 -lc++")
+else() # Added these arguments for Clang (-stdlib=libc++ is not supported by g++)
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -stdlib=libc++ -std=c++17")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -stdlib=libc++ -std=c++17")
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

@@ -9,13 +9,13 @@ fi
 if [ $DEBUG -eq 1 ]; then
     echo "Debug mode"
     mkdir -p debug
-    cmake -S . -B debug -DCMAKE_BUILD_TYPE=Debug -G Ninja
+    cmake -S . -B debug -DCMAKE_BUILD_TYPE=Debug -G "Unix Makefiles"
     cmake --build debug
     exit 0
 elif [ $DEBUG -eq 0 ]; then
     echo "Release mode"
     mkdir -p build
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles"
     cmake --build build
     exit 0
 fi

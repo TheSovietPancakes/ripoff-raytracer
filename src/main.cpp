@@ -34,14 +34,22 @@
 // #define WIDTH 1080
 // #define HEIGHT 1920
 // These are the dimensions of an iPhone 16, the phone that I have lol
-// #define WIDTH 1179
-// #define HEIGHT 2556
+#define WIDTH 1179
+#define HEIGHT 2556
 
-#define WIDTH 500
-#define HEIGHT WIDTH
+// #define WIDTH 512
+// #define HEIGHT WIDTH
+// Each frame is split into tiles so that the GPU has a change to refresh
+// the screen and avoid crashing. However, if your GPU is powerful enough,
+// a potential bottleneck could occur in data transfer between CPU/GPU.
+// Update with caution.
+#define TILE_SIZE 512
 // The path, absolute or relative (to the cwd), to the .obj file to load.
-// #define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/dragon.obj"
-#define OBJECT_PATH "C:/Users/Soviet Pancakes/Desktop/code/raytracer/dragon.obj"
+#ifdef _WIN32
+#define OBJECT_PATH "C:/Users/Soviet Pancakes/Desktop/code/raytracer/knight.obj"
+#else
+#define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
+#endif
 // How much space there is inside the Cornell box between the model and the walls
 #define CORNELL_BREATHING_ROOM 200.0f
 
@@ -98,11 +106,12 @@ void placeImageDataIntoBMP(const std::vector<unsigned char>& pixels, int width, 
   for (int y = height - 1; y >= 0; --y) {
     for (int x = 0; x < width; ++x) {
       size_t i = (y * width + x) * 4;
-      unsigned char R = pixels[i + 0];                  // .x
-      unsigned char G = pixels[i + 1];                  // .y
-      unsigned char B = pixels[i + 2];                  // .z
-      std::array<unsigned char, 3> triplet = {B, G, R}; // BMP wants BGR
-      file.write(reinterpret_cast<char*>(triplet.data()), 3);
+      const char R = pixels[i + 0];                  // .x
+      const char G = pixels[i + 1];                  // .y
+      const char B = pixels[i + 2];                  // .z
+      file.write(const_cast<const char*>(&B), 1);
+      file.write(const_cast<const char*>(&G), 1);
+      file.write(const_cast<const char*>(&R), 1);
     }
     file.write(reinterpret_cast<char*>(padding.data()), padSize);
   }
@@ -217,19 +226,18 @@ int main() {
       .reflectiveness = 0.0f,
       .specularProbability = 0.0f,
   };
-  mesh.pos.y += 60.0f;
-  mesh.scale = 200.0f;
-  // mesh.scale = 0.5f;
   mesh.yaw = 1.5f;
-  // mesh.material = {.color = {0.8f, 0.8f, 0.8f}, .emissionColor = {1.0f, 1.0f, 1.0f}, .emissionStrength = 10.0f};
-  // mesh.yaw = 0.5f;
-  // mesh.scale = 0.5f;
+  // KNIGHT
+  mesh.scale = 0.5f;
+  // DRAGON
+  // mesh.pos.y += 60.0f;
+  // mesh.scale = 200.0f;
 
   // Add a light-emitting triangle underneath the dragon
-  float minX = nodeList[mesh.nodeIdx].bounds.min.x - CORNELL_BREATHING_ROOM, maxX = nodeList[mesh.nodeIdx].bounds.max.x + CORNELL_BREATHING_ROOM;
-  float minY = nodeList[mesh.nodeIdx].bounds.min.y,
-        maxY = nodeList[mesh.nodeIdx].bounds.max.y + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
-  float minZ = nodeList[mesh.nodeIdx].bounds.min.z - CORNELL_BREATHING_ROOM, maxZ = nodeList[mesh.nodeIdx].bounds.max.z + CORNELL_BREATHING_ROOM;
+  float minX = nodeList[mesh.nodeIdx].bounds.min.s[0] - CORNELL_BREATHING_ROOM, maxX = nodeList[mesh.nodeIdx].bounds.max.s[0] + CORNELL_BREATHING_ROOM;
+  float minY = nodeList[mesh.nodeIdx].bounds.min.s[1],
+        maxY = nodeList[mesh.nodeIdx].bounds.max.s[1] + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
+  float minZ = nodeList[mesh.nodeIdx].bounds.min.s[2] - CORNELL_BREATHING_ROOM, maxZ = nodeList[mesh.nodeIdx].bounds.max.s[2] + CORNELL_BREATHING_ROOM;
 
   // Floor (Y = minY)
   addQuad(cl_float3 {minX, minY, minZ}, cl_float3 {maxX, minY, minZ}, cl_float3 {maxX, minY, maxZ}, cl_float3 {minX, minY, maxZ}, cl_float3 {0, 1, 0}, cl_float3 {0.0f, 0.8f, 0.0f});
@@ -311,7 +319,7 @@ int main() {
   }
   err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &nodeBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg node buffer: " << err << std::endl;
     return 1;
   }
 
@@ -344,34 +352,34 @@ int main() {
   cl_int meshCount = (cl_int)meshList.size();
   err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &meshBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg mesh buffer: " << err << std::endl;
     return 1;
   }
   err = clSetKernelArg(kernel, 1, sizeof(cl_mem), &triangleBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg triangle buffer: " << err << std::endl;
     return 1;
   }
   err = clSetKernelArg(kernel, 2, sizeof(cl_int), &meshCount);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg mesh count: " << err << std::endl;
     return 1;
   }
   err = clSetKernelArg(kernel, 3, sizeof(cl_mem), &imageBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg image buffer: " << err << std::endl;
     return 1;
   }
   const cl_int width = WIDTH; // you must pass a pointer into clSetKernelArg, meaning you have to pass an lvalue
   const cl_int height = HEIGHT;
   err = clSetKernelArg(kernel, 4, sizeof(cl_int), &width);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg image width: " << err << std::endl;
     return 1;
   }
   err = clSetKernelArg(kernel, 5, sizeof(cl_int), &height);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg image height: " << err << std::endl;
     return 1;
   }
   CameraInformation camInfo = {.position = {CAMERA_START_X, CAMERA_START_Y, CAMERA_START_Z},
@@ -382,13 +390,13 @@ int main() {
                                .aspectRatio = (float)WIDTH / (float)HEIGHT};
   err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg camera information: " << err << std::endl;
     return 1;
   }
   cl_uint numFrames = 0;
   err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg" << std::endl;
+    std::cerr << "failed to set kernel arg num frames: " << err << std::endl;
     return 1;
   }
 
@@ -433,12 +441,12 @@ int main() {
       // --- Run kernel with a seed derived from numFrames
       err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << std::endl;
+        std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
         break;
       }
       err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << std::endl;
+        std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
         break;
       }
       err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
@@ -525,12 +533,12 @@ int main() {
       // Update camera info arg
       err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << std::endl;
+        std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
         break;
       }
       err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg: " << err << std::endl;
+        std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
         break;
       }
       // Enqueue kernel
@@ -607,7 +615,7 @@ int main() {
   static std::vector<uint32_t> intBuffer;
   std::chrono::high_resolution_clock::time_point startTime = std::chrono::high_resolution_clock::now();
   intBuffer.reserve(pixels.size());
-  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), 128);
+  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), tileSize);
   size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
   size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
   size_t totalTiles = totalTilesX * totalTilesY;
@@ -655,12 +663,12 @@ int main() {
         std::cout << std::flush;
         err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg: " << err << std::endl;
+          std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
           return 1;
         }
         err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg: " << err << std::endl;
+          std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
           return 1;
         }
         err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);

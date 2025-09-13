@@ -14,6 +14,9 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
         exit
     } else {
         Write-Warning "Please run this script from an elevated PowerShell (Run as Administrator)."
+        # Pause
+        Write-Host "Press Enter to exit..."
+        [void][System.Console]::ReadLine()
         exit 1
     }
 }
@@ -78,13 +81,13 @@ if ($openclFound) {
     exit 1
 }
 
-# Compiler
-if (Get-Command ninja -ErrorAction SilentlyContinue) {
-    Write-Host "Compiler (ninja): installed"
+# Compiler (Unix Makefiles ; g++)
+if (Get-Command make -ErrorAction SilentlyContinue) {
+    Write-Host "Compiler (make): installed"
 } else {
-    Write-Host "Compiler (ninja): missing"
-    Write-Host "Installing Ninja via Chocolatey..."
-    choco install ninja -y
+    Write-Host "Compiler (make): missing"
+    Write-Host "Installing make via Chocolatey..."
+    choco install make -y
 }
 
 # --- Summary ---
