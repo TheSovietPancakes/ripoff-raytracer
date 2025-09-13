@@ -176,6 +176,34 @@ int main() {
     std::cerr << "Failed to get device info\n";
     return 1;
   }
+  #ifndef NODEBUG
+  {
+    char deviceName[128];
+    char deviceVendor[128];
+    cl_device_type deviceType;
+    err = clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(deviceName), deviceName, nullptr);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to get device info\n";
+      return 1;
+    }
+    err = clGetDeviceInfo(device, CL_DEVICE_TYPE, sizeof(deviceType), &deviceType, nullptr);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to get device info\n";
+      return 1;
+    }
+    err = clGetDeviceInfo(device, CL_DEVICE_VENDOR, sizeof(deviceVendor), deviceVendor, nullptr);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to get device info\n";
+      return 1;
+    }
+    std::cout << "Using device: " << deviceName << "\n";
+    std::cout << "Compute Units: " << compUnits << "\n";
+    std::cout << "Global Memory: " << globalMem / (1024 * 1024) << " MB\n";
+    std::cout << "Device Type: " << (deviceType == CL_DEVICE_TYPE_GPU ? "GPU" : deviceType == CL_DEVICE_TYPE_CPU ? "CPU" : "Other") << "\n";
+    std::cout << "Device Vendor: " << deviceVendor << "\n";
+    std::cout << "-----------------------------------\n";
+  }
+  #endif
 
   cl_context ctx = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
   if (err != CL_SUCCESS) {

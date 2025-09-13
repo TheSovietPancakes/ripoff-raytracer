@@ -77,9 +77,15 @@ target_link_libraries(${PROJECT_NAME} ${OpenCL_LIBRARIES})
 
 # debug mode
 if(CMAKE_COMPILER_IS_GNUCXX)
-  # libc++
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -std=c++17 -lc++")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -std=c++17 -lc++")
+  if(MSVC OR MINGW)
+    # If using MinGW, don't use `-lc++`, use default libstdc++
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -std=c++17")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -std=c++17")
+  else()
+    # For non-Windows GNU compilers (Linux), apply `-lc++` (only if using Clang/GCC with libc++)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -std=c++17 -lc++")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -std=c++17 -lc++")
+  endif()
 else() # Added these arguments for Clang (-stdlib=libc++ is not supported by g++)
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -stdlib=libc++ -std=c++17")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -stdlib=libc++ -std=c++17")

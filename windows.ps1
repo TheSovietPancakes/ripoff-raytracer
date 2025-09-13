@@ -36,6 +36,9 @@ if (Get-Command choco -ErrorAction SilentlyContinue) {
         Write-Host "Chocolatey installed successfully."
     } else {
         Write-Warning "Chocolatey installation failed. Please install it manually from https://chocolatey.org/install"
+        # Pause
+        Write-Host "Press Enter to exit..."
+        [void][System.Console]::ReadLine()
         exit 1
     }
 }
@@ -51,6 +54,9 @@ if (Get-Command cmake -ErrorAction SilentlyContinue) {
         Write-Host "CMake installed successfully."
     } else {
         Write-Warning "CMake installation failed. Please install it manually from https://cmake.org/download/"
+        # Pause
+        Write-Host "Press Enter to exit..."
+        [void][System.Console]::ReadLine()
         exit 1
     }
 }
