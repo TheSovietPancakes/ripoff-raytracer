@@ -5,7 +5,7 @@
 
 // Math
 #define tau 6.28318530717958647692f // 2pi
-#define EPSILON 1e-6f // Tiny number for finding precision errors
+#define EPSILON 1e-6f               // Tiny number for finding precision errors
 
 typedef struct {
   float3 min;

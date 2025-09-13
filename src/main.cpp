@@ -106,9 +106,9 @@ void placeImageDataIntoBMP(const std::vector<unsigned char>& pixels, int width, 
   for (int y = height - 1; y >= 0; --y) {
     for (int x = 0; x < width; ++x) {
       size_t i = (y * width + x) * 4;
-      const char R = pixels[i + 0];                  // .x
-      const char G = pixels[i + 1];                  // .y
-      const char B = pixels[i + 2];                  // .z
+      const char R = pixels[i + 0]; // .x
+      const char G = pixels[i + 1]; // .y
+      const char B = pixels[i + 2]; // .z
       file.write(const_cast<const char*>(&B), 1);
       file.write(const_cast<const char*>(&G), 1);
       file.write(const_cast<const char*>(&R), 1);
@@ -148,7 +148,7 @@ int main() {
   char version[128];
   clGetPlatformInfo(platform, CL_PLATFORM_VERSION, sizeof(version), version, nullptr);
   std::cout << "OpenCL Version: " << version << std::endl;
-  
+
   cl_uint numDevices;
   err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
   if (err != CL_SUCCESS) {
@@ -176,7 +176,7 @@ int main() {
     std::cerr << "Failed to get device info\n";
     return 1;
   }
-  #if !defined(NODEBUG) && !defined(_NODEBUG)
+#if !defined(NODEBUG) && !defined(_NODEBUG)
   {
     char deviceName[128];
     char deviceVendor[128];
@@ -203,7 +203,7 @@ int main() {
     std::cout << "Device Vendor: " << deviceVendor << "\n";
     std::cout << "-----------------------------------\n";
   }
-  #endif
+#endif
 
   cl_context ctx = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
   if (err != CL_SUCCESS) {
@@ -262,13 +262,16 @@ int main() {
   // mesh.scale = 200.0f;
 
   // Add a light-emitting triangle underneath the dragon
-  float minX = nodeList[mesh.nodeIdx].bounds.min.s[0] - CORNELL_BREATHING_ROOM, maxX = nodeList[mesh.nodeIdx].bounds.max.s[0] + CORNELL_BREATHING_ROOM;
+  float minX = nodeList[mesh.nodeIdx].bounds.min.s[0] - CORNELL_BREATHING_ROOM,
+        maxX = nodeList[mesh.nodeIdx].bounds.max.s[0] + CORNELL_BREATHING_ROOM;
   float minY = nodeList[mesh.nodeIdx].bounds.min.s[1],
         maxY = nodeList[mesh.nodeIdx].bounds.max.s[1] + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
-  float minZ = nodeList[mesh.nodeIdx].bounds.min.s[2] - CORNELL_BREATHING_ROOM, maxZ = nodeList[mesh.nodeIdx].bounds.max.s[2] + CORNELL_BREATHING_ROOM;
+  float minZ = nodeList[mesh.nodeIdx].bounds.min.s[2] - CORNELL_BREATHING_ROOM,
+        maxZ = nodeList[mesh.nodeIdx].bounds.max.s[2] + CORNELL_BREATHING_ROOM;
 
   // Floor (Y = minY)
-  addQuad(cl_float3 {minX, minY, minZ}, cl_float3 {maxX, minY, minZ}, cl_float3 {maxX, minY, maxZ}, cl_float3 {minX, minY, maxZ}, cl_float3 {0, 1, 0}, cl_float3 {0.0f, 0.8f, 0.0f});
+  addQuad(cl_float3{minX, minY, minZ}, cl_float3{maxX, minY, minZ}, cl_float3{maxX, minY, maxZ}, cl_float3{minX, minY, maxZ}, cl_float3{0, 1, 0},
+          cl_float3{0.0f, 0.8f, 0.0f});
   meshList.back().material = {
       .type = MaterialType_Checker,
       .color = {0.1, 0.1, 0.1},
@@ -369,13 +372,13 @@ int main() {
   glBindTexture(GL_TEXTURE_2D, texture);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  
+
   // Pixel storage alignment so each row is tightly packed (4 byte RGBA)
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 #endif
-  
+
   std::vector<unsigned char> pixels(WIDTH * HEIGHT * 4, 0);
-  
+
   // args (same order as kernel)
   cl_int meshCount = (cl_int)meshList.size();
   err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &meshBuffer);

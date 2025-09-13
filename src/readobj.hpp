@@ -15,11 +15,11 @@
 
 using float3 = cl_float3;
 
-
 std::ostream& operator<<(std::ostream& os, const float3& v) {
   os << "(" << v.s[0] << ", " << v.s[1] << ", " << v.s[2] << ")";
   return os;
 }
+
 using float4 = cl_float4;
 
 // Commented out because float3 is just an alias of float4
@@ -28,19 +28,11 @@ using float4 = cl_float4;
 //   return os;
 // }
 
-float3 operator+(const float3& a, const float3& b) {
-  return {a.s[0] + b.s[0], a.s[1] + b.s[1], a.s[2] + b.s[2]};
-}
+float3 operator+(const float3& a, const float3& b) { return {a.s[0] + b.s[0], a.s[1] + b.s[1], a.s[2] + b.s[2]}; }
 
-float3 operator-(const float3& a, const float3& b) {
-  return {a.s[0] - b.s[0], a.s[1] - b.s[1], a.s[2] - b.s[2]};
-}
-float3 operator*(const float3& a, const float b) {
-  return {a.s[0] * b, a.s[1] * b, a.s[2] * b};
-}
-float3 operator/(const float3& a, const float b) {
-  return {a.s[0] / b, a.s[1] / b, a.s[2] / b};
-}
+float3 operator-(const float3& a, const float3& b) { return {a.s[0] - b.s[0], a.s[1] - b.s[1], a.s[2] - b.s[2]}; }
+float3 operator*(const float3& a, const float b) { return {a.s[0] * b, a.s[1] * b, a.s[2] * b}; }
+float3 operator/(const float3& a, const float b) { return {a.s[0] / b, a.s[1] / b, a.s[2] / b}; }
 
 typedef struct {
   float3 min = {CL_FLT_MAX, CL_FLT_MAX, CL_FLT_MAX};
@@ -264,7 +256,7 @@ void SplitBVH(Node& parent, int depth = 10) {
   // Create child nodes
   parent.childIndex = nodeList.size();
 
-  Node childA = { .childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx, .numTriangles = leftCount};
+  Node childA = {.childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx, .numTriangles = leftCount};
 
   Node childB = {.childIndex = 0, .firstTriangleIdx = parent.firstTriangleIdx + leftCount, .numTriangles = parent.numTriangles - leftCount};
 
@@ -396,31 +388,34 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
 }
 
 void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color) {
-  Node n = {
-      .bounds =
-          {
-              .min = {fminf(fminf(a.s[0], b.s[0]), fminf(c.s[0], d.s[0])), fminf(fminf(a.s[1], b.s[1]), fminf(c.s[1], d.s[1])), fminf(fminf(a.s[2], b.s[2]), fminf(c.s[2], d.s[2]))},
-              .max = {fmaxf(fmaxf(a.s[0], b.s[0]), fmaxf(c.s[0], d.s[0])), fmaxf(fmaxf(a.s[1], b.s[1]), fmaxf(c.s[1], d.s[1])), fmaxf(fmaxf(a.s[2], b.s[2]), fmaxf(c.s[2], d.s[2]))},
-          },
-      .childIndex = 0,
-      .firstTriangleIdx = (cl_uint)triangleList.size(),
-      .numTriangles = 2,
-  };
+  Node n =
+      {
+          .bounds =
+              {
+                  .min = {fminf(fminf(a.s[0], b.s[0]), fminf(c.s[0], d.s[0])), fminf(fminf(a.s[1], b.s[1]), fminf(c.s[1], d.s[1])),
+                          fminf(fminf(a.s[2], b.s[2]), fminf(c.s[2], d.s[2]))},
+                  .max = {fmaxf(fmaxf(a.s[0], b.s[0]), fmaxf(c.s[0], d.s[0])), fmaxf(fmaxf(a.s[1], b.s[1]), fmaxf(c.s[1], d.s[1])),
+                          fmaxf(fmaxf(a.s[2], b.s[2]), fmaxf(c.s[2], d.s[2]))},
+              },
+          .childIndex = 0,
+          .firstTriangleIdx = (cl_uint)triangleList.size(),
+          .numTriangles = 2,
+      };
   nodeList.emplace_back(n);
   // SplitBVH(nodeList.size() - 1);
   SplitBVH(nodeList.back());
   MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
-                        .material = {
-                            .type = MaterialType_Solid,
-                            .color = color,
-                            .emissionColor = {0, 0, 0},
-                            .emissionStrength = 0.0f,
-                            .reflectiveness = 0.0f,
-                            .specularProbability = 1.0f,
-                        }};
+                       .material = {
+                           .type = MaterialType_Solid,
+                           .color = color,
+                           .emissionColor = {0, 0, 0},
+                           .emissionStrength = 0.0f,
+                           .reflectiveness = 0.0f,
+                           .specularProbability = 1.0f,
+                       }};
 
   // two triangles
-  triangleList.emplace_back(Triangle {a, b, c, normal, normal, normal});
-  triangleList.emplace_back(Triangle {a, c, d, normal, normal, normal});
-    meshList.emplace_back(quadMesh);
-  };
+  triangleList.emplace_back(Triangle{a, b, c, normal, normal, normal});
+  triangleList.emplace_back(Triangle{a, c, d, normal, normal, normal});
+  meshList.emplace_back(quadMesh);
+};
