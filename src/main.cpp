@@ -176,7 +176,7 @@ int main() {
     std::cerr << "Failed to get device info\n";
     return 1;
   }
-  #ifndef NODEBUG
+  #if !defined(NODEBUG) && !defined(_NODEBUG)
   {
     char deviceName[128];
     char deviceVendor[128];
@@ -369,13 +369,13 @@ int main() {
   glBindTexture(GL_TEXTURE_2D, texture);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
+  
   // Pixel storage alignment so each row is tightly packed (4 byte RGBA)
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 #endif
-
+  
   std::vector<unsigned char> pixels(WIDTH * HEIGHT * 4, 0);
-
+  
   // args (same order as kernel)
   cl_int meshCount = (cl_int)meshList.size();
   err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &meshBuffer);
@@ -428,7 +428,11 @@ int main() {
     return 1;
   }
 
-  clFinish(queue);
+  err = clFinish(queue);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to finish command queue: " << err << std::endl;
+    return 1;
+  }
 #ifndef RENDER_AND_GET_OUT
   std::chrono::high_resolution_clock::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
   glfwSetWindowFocusCallback(window, [](GLFWwindow* win, int focused) { windowIsFocused = focused != 0; });
@@ -640,15 +644,13 @@ int main() {
   glDeleteTextures(1, &texture);
 #else
   // Render the image. Enqueue the kernel 'FRAME_TOTAL' times and average the results.
-  static std::vector<uint32_t> intBuffer;
+  static std::vector<uint32_t> intBuffer(pixels.size(), 0u);
   std::chrono::high_resolution_clock::time_point startTime = std::chrono::high_resolution_clock::now();
-  intBuffer.reserve(pixels.size());
-  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), tileSize);
+  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), TILE_SIZE);
   size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
   size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
   size_t totalTiles = totalTilesX * totalTilesY;
   float msPerFrame = -0.0f; // for a more accurate "time remaining" estimate
-
   while (numFrames < FRAME_TOTAL) {
     size_t tileIndex = 0;
     for (size_t x = 0; x < WIDTH; x += tileSize) {
