@@ -1,5 +1,5 @@
 // Render quality
-#define IncomingRaysPerPixel 100
+#define IncomingRaysPerPixel 10
 #define MaxBounceCount 30
 #define BVHStackSize 64
 

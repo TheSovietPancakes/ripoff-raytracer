@@ -60,13 +60,9 @@
 #endif
 #include <numeric>
 
-std::string loadKernelSource(const std::string& filename) {
-  std::ifstream file(filename);
-  if (!file.is_open()) {
-    std::cout << "File not found or not opened: " << filename << std::endl;
-    exit(1);
-  }
-  return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+std::string loadKernelSource(/* const std::string& filename */) {
+  #include "kernelsource.hpp"
+  return kernel_source;
 }
 
 void placeImageDataIntoBMP(const std::vector<unsigned char>& pixels, int width, int height, const std::string& filename) {
@@ -219,7 +215,7 @@ int main() {
     std::cerr << "OBJ file does not exist: " << OBJECT_PATH << std::endl;
     return 1;
   }
-  std::string kernelSource = loadKernelSource("src/Trace.cl");
+  std::string kernelSource = loadKernelSource();
   const char* data = kernelSource.data();
   cl_program program = clCreateProgramWithSource(ctx, 1, &data, nullptr, &err);
   if (err != CL_SUCCESS) {

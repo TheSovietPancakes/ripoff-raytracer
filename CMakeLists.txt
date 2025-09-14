@@ -59,6 +59,15 @@ endif()
 # # Find OpenGL
 # find_package(OpenGL REQUIRED)
 
+set(TRACE_CL_SOURCE "src/Trace.cl")
+set(TRACE_CL_OUT "src/kernelsource.hpp")
+file(READ ${TRACE_CL_SOURCE} TRACE_CL_CONTENTS)
+string(REPLACE "\\" "\\\\" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
+string(REPLACE "\n" "\\n" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
+string(REPLACE "\"" "\\\"" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
+
+file(WRITE ${TRACE_CL_OUT} "const char* kernel_source = \"${TRACE_CL_CONTENTS}\";\n")
+
 # Add the executable
 add_executable(${PROJECT_NAME} src/main.cpp)
 
