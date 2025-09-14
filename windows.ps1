@@ -30,7 +30,6 @@ if (Get-Command choco -ErrorAction SilentlyContinue) {
 } else {
     Write-Host "Chocolatey: missing"
     Write-Host "Installing Chocolatey..."
-    Set-ExecutionPolicy Bypass -Scope Process -Force
     iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         Write-Host "Chocolatey installed successfully."
