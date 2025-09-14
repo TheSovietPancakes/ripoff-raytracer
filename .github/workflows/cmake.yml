@@ -23,15 +23,12 @@ jobs:
     - name: Install Dependencies for Linux
       if: matrix.os == 'ubuntu-20.04'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake libopencl-dev
-
-    - name: Install Dependencies for Windows
+        sudo apt-get install -y build-essential cmake opencl-headers ocl-icd-opencl-dev
+    
+    - name: Install Dependencies for Windows (Run windows.ps1)
       if: matrix.os == 'windows-latest'
       run: |
-        choco install cmake
-        choco install opencl-headers
-        choco install opencl-dev
+        powershell -File .github\workflows\windows.ps1
 
     - name: Configure CMake
       run: |
