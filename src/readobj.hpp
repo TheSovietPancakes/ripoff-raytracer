@@ -407,10 +407,11 @@ void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color
   MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
                        .material = {
                            .type = MaterialType_Solid,
-                           .color = color,
+                           //  .color = {0, 0, 0},
+                            .color = color,
                            .emissionColor = {0, 0, 0},
                            .emissionStrength = 0.0f,
-                           .reflectiveness = 0.0f,
+                           .reflectiveness = 1.0f,
                            .specularProbability = 1.0f,
                        }};
 

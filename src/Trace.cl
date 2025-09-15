@@ -1,5 +1,5 @@
 // Render quality
-#define IncomingRaysPerPixel 10
+#define IncomingRaysPerPixel 300
 #define MaxBounceCount 30
 #define BVHStackSize 64
 
@@ -76,6 +76,10 @@ typedef struct {
 inline void GrowBoundingBox(__private BoundingBox *box, Triangle tri) {
   box->min = fmin(box->min, fmin(tri.posA, fmin(tri.posB, tri.posC)));
   box->max = fmax(box->max, fmax(tri.posA, fmax(tri.posB, tri.posC)));
+}
+
+float3 clamp3(float3 v, float minVal, float maxVal) {
+  return fmin(fmax(v, (float3)(minVal)), (float3)(maxVal));
 }
 
 float3 lerp3(float3 a, float3 b, float t) { return a * (1.0f - t) + b * t; }
@@ -443,7 +447,7 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
 
     if (!hit.didHit) {
       // environment / background contribution (if any)
-      // incomingLight += throughput * (float3)(0.2f,0.3f,0.5f); // if you want
+      // incomingLight += throughput * (float3)(1);
       break;
     }
     if (hit.material.type == MaterialType_Invisible) {

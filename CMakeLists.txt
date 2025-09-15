@@ -66,7 +66,8 @@ string(REPLACE "\\" "\\\\" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
 string(REPLACE "\n" "\\n" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
 string(REPLACE "\"" "\\\"" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
 
-file(WRITE ${TRACE_CL_OUT} "const char* kernel_source = \"${TRACE_CL_CONTENTS}\";\n")
+file(WRITE ${TRACE_CL_OUT} "// This file is auto-generated from ${TRACE_CL_SOURCE}. Do not edit directly; Changes will be overwritten!\n")
+file(APPEND ${TRACE_CL_OUT} "const char* kernel_source = \"${TRACE_CL_CONTENTS}\";\n")
 
 # Add the executable
 add_executable(${PROJECT_NAME} src/main.cpp)
