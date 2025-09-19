@@ -152,7 +152,7 @@ int main() {
       .color = {0.8, 0.8, 0.8},
       .emissionColor = {0.0f, 0.0f, 0.0f},
       .emissionStrength = 0.0f,
-      .reflectiveness = 1.0f,
+      .reflectiveness = 0.0f,
       .specularProbability = 0.0f,
   };
   mesh.yaw = 1.5f;

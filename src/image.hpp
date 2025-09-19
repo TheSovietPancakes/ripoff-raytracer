@@ -291,7 +291,7 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
       .color = {0.07, 0.07, 0.07},
       .emissionColor = {0.1, 0.1, 0.1},
       .emissionStrength = 40.0f,
-      .reflectiveness = 1.0f,
+      .reflectiveness = 0.0f,
       .specularProbability = 1.0f,
   };
 
@@ -303,7 +303,7 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
 
   // Front wall (Z = minZ)
   addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {1, 1, 1});
-  meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
+  // meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
 
   // Left wall (X = minX)
   addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.4});
