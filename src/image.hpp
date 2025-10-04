@@ -283,12 +283,12 @@ void setupNextVideoFrame(CameraInformation& camInfo, int frameIndex) {
 
 void addCornellBoxToScene(const MeshInfo& mesh) {
   // Add a light-emitting triangle underneath the dragon
-  float minX = nodeList[mesh.nodeIdx].bounds.min.s[0] - CORNELL_BREATHING_ROOM,
-        maxX = nodeList[mesh.nodeIdx].bounds.max.s[0] + CORNELL_BREATHING_ROOM;
-  float minY = nodeList[mesh.nodeIdx].bounds.min.s[1],
-        maxY = nodeList[mesh.nodeIdx].bounds.max.s[1] + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
-  float minZ = nodeList[mesh.nodeIdx].bounds.min.s[2] - CORNELL_BREATHING_ROOM,
-        maxZ = nodeList[mesh.nodeIdx].bounds.max.s[2] + CORNELL_BREATHING_ROOM;
+  float minX = (nodeList[mesh.nodeIdx].bounds.min.s[0] * mesh.scale) - CORNELL_BREATHING_ROOM,
+        maxX = (nodeList[mesh.nodeIdx].bounds.max.s[0] * mesh.scale) + CORNELL_BREATHING_ROOM;
+  float minY = (nodeList[mesh.nodeIdx].bounds.min.s[1] * mesh.scale),
+        maxY = (nodeList[mesh.nodeIdx].bounds.max.s[1] * mesh.scale) + CORNELL_BREATHING_ROOM; // do not sub so the model touches the floor
+  float minZ = (nodeList[mesh.nodeIdx].bounds.min.s[2] * mesh.scale) - CORNELL_BREATHING_ROOM,
+        maxZ = (nodeList[mesh.nodeIdx].bounds.max.s[2] * mesh.scale) + CORNELL_BREATHING_ROOM;
 
   // Floor (Y = minY)
   addQuad(cl_float3{minX, minY, minZ}, cl_float3{maxX, minY, minZ}, cl_float3{maxX, minY, maxZ}, cl_float3{minX, minY, maxZ}, cl_float3{0, 1, 0},

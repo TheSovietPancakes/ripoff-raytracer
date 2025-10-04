@@ -12,14 +12,6 @@
 bool windowIsFocused = true;
 
 int main() {
-  std::cout << "Please enter a width, in pixels. For example, 1920, 3840, ...\n> " << std::flush;
-  std::cin >> WIDTH;
-  std::cout << "Please enter a height, in pixels. For example, 1080, 2160, ...\n> " << std::flush;
-  std::cin >> HEIGHT;
-  std::cout << "Please enter how many rays per pixel to shoot. Higher = better quality, but slower. 100-500 is a good trade-off.\n> " << std::flush;
-  std::cin >> RAYS_PER_PIXEL;
-  std::cout << "Please enter the maximum number of bounces per ray. Higher = better quality, but slower. 50+ is a good trade-off.\n> " << std::flush;
-  std::cin >> MAX_BOUNCE_COUNT;
   cl_int err;
 #ifndef RENDER_AND_GET_OUT
   err = glfwInit();
@@ -38,17 +30,45 @@ int main() {
   // Check if the output directory for video frames exists
   if (VIDEO_FRAME_COUNT > 1) {
     if (!std::filesystem::exists(VIDEO_FRAME_OUTPUT_DIR)) {
-      std::cerr << "Output directory for video frames does not exist: " << VIDEO_FRAME_OUTPUT_DIR << std::endl;
-      return 1;
+      std::cout << "Output directory for video frames does not exist: " << VIDEO_FRAME_OUTPUT_DIR << std::endl;
+      std::cout << "Should one be made automatically in the current working directory? (y/N)\n> " << std::flush;
+      char response = 'n';
+      std::cin >> response;
+      if (response == 'y' || response == 'Y') {
+        std::filesystem::create_directory(VIDEO_FRAME_OUTPUT_DIR);
+      } else {
+        std::cout << "Exiting..." << std::endl;
+        return 1;
+      }
     } else {
       // Check if it has any contents
       if (!std::filesystem::is_empty(VIDEO_FRAME_OUTPUT_DIR)) {
-        std::cerr << "Output directory for video frames is not empty: " << VIDEO_FRAME_OUTPUT_DIR << std::endl;
+        std::cout << "Output directory for video frames is not empty: " << VIDEO_FRAME_OUTPUT_DIR << std::endl;
+        std::cout << "Files will not be overwritten, just in case you have something important in there.\n";
+        std::cout << "Please empty it and try again.\nExiting..." << std::endl;
         return 1;
       }
     }
   }
 #endif
+  std::cout << "Please enter a width, in pixels. For example, 1920, 3840, ...\n> " << std::flush;
+  std::cin >> WIDTH;
+  std::cout << "Please enter a height, in pixels. For example, 1080, 2160, ...\n> " << std::flush;
+  std::cin >> HEIGHT;
+  std::cout << "Please enter how many rays per pixel to shoot. Higher = better quality, but slower. 100-500 is a good trade-off.\n> " << std::flush;
+  std::cin >> RAYS_PER_PIXEL;
+  std::cout << "Please enter the maximum number of bounces per ray. Higher = better quality, but slower, with diminishing returns. 50+ is a good trade-off.\n> " << std::flush;
+  std::cin >> MAX_BOUNCE_COUNT;
+  std::cout << "Please enter a tile size. 512-4096 is a good trade-off. Powers of 2 are preferred.\n"
+            << "Higher = less stable on some GPUs, with more infrequent progress updates.\n"
+            << "Higher values are also more likely to freeze or hang, as there is a larger workload at once.\n"
+            << "> " << std::flush;
+  std::cin >> TILE_SIZE;
+  if (TILE_SIZE > WIDTH && TILE_SIZE > HEIGHT) {
+    TILE_SIZE = std::min(WIDTH, HEIGHT);
+    std::cout << "Invalid tile size, using " << TILE_SIZE << " instead.\n";
+  }
+  
   cl_uint numPlatforms;
   err = clGetPlatformIDs(0, nullptr, &numPlatforms);
   if (err != CL_SUCCESS || numPlatforms == 0) {
@@ -171,10 +191,11 @@ int main() {
   };
   mesh.yaw = 1.5f;
   // KNIGHT
-  mesh.scale = 0.5f;
+  // mesh.scale = 0.5f;
   // DRAGON
-  // mesh.pos.y += 60.0f;
-  // mesh.scale = 200.0f;
+  mesh.pos.s[1] += 60.0f;
+  mesh.scale = 200.0f;
+  CAMERA_START_Y -= 60.0f;
 
   addCornellBoxToScene(mesh);
 
@@ -209,6 +230,7 @@ int main() {
                                .roll = CAMERA_START_ROLL,
                                .fov = 90.0f,
                                .aspectRatio = (float)WIDTH / (float)HEIGHT};
+
   err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
   if (err != CL_SUCCESS) {
     std::cerr << "failed to set kernel arg camera information: " << err << std::endl;

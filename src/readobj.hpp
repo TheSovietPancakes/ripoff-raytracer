@@ -197,7 +197,8 @@ void PrintDebugBVH(size_t rootNodeIdx) {
             << " triangles per leaf, max depth " << maxDepth << "\n";
 }
 
-void SplitBVH(Node& parent, int depth = 10) {
+void SplitBVH(size_t parentIdx, int depth = 10) {
+  Node& parent = nodeList[parentIdx];
   if (depth == 0 || parent.numTriangles <= 2)
     return;
 
@@ -253,8 +254,10 @@ void SplitBVH(Node& parent, int depth = 10) {
   nodeList.emplace_back(childB);
 
   // Recursively split children
-  SplitBVH(nodeList[parent.childIndex], depth - 1);
-  SplitBVH(nodeList[parent.childIndex + 1], depth - 1);
+  // Parent must be accessed via [index] here, as the vector
+  // may have been reallocated with the above emplace_back calls
+  SplitBVH(nodeList[parentIdx].childIndex, depth - 1);
+  SplitBVH(nodeList[parentIdx].childIndex + 1, depth - 1);
 }
 
 // An inefficient algorithm to read the contents of a Wavefront OBJ file into a list of triangles.
@@ -355,7 +358,7 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
   size_t rootIdx = nodeList.size();
   nodeList.emplace_back(c);
   // SplitBVH(rootIdx, 32);
-  SplitBVH(c, 64);
+  SplitBVH(rootIdx, 64);
   // PrintDebugBVH(rootIdx);
   return MeshInfo{
       .nodeIdx = rootIdx,
@@ -381,8 +384,7 @@ void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color
           .numTriangles = 2,
       };
   nodeList.emplace_back(n);
-  // SplitBVH(nodeList.size() - 1);
-  SplitBVH(nodeList.back());
+  SplitBVH(nodeList.size() - 1);
   MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
                        .material = {
                            .type = MaterialType_Solid,
