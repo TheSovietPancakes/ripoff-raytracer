@@ -30,21 +30,21 @@
 #define FRAME_TOTAL 1
 // Functionally equivalent to FRAME_TOTAL, as it averages together pixel color results
 // however, the averaging happens on the GPU, and images are brighter and quicker.
-#define RAYS_PER_PIXEL 300
-#define MAX_BOUNCE_COUNT 50 // Self-explanatory
+unsigned int RAYS_PER_PIXEL = 300;
+unsigned int MAX_BOUNCE_COUNT = 50; // Self-explanatory
 // The resolution of the output image and size of the window, if a window is created.
 // #define WIDTH 512
 // #define HEIGHT 512
 // These are the dimensions of an iPhone 16, the phone that I have lol
-#define WIDTH 1180
-#define HEIGHT 2556
+unsigned int WIDTH = 2160;
+unsigned int HEIGHT = 3840;
 // Each frame is split into tiles so that the GPU has a change to refresh
 // the screen and avoid crashing. However, if your GPU is powerful enough,
 // a potential bottleneck could occur in data transfer between CPU/GPU.
 // Update with caution.
 #define TILE_SIZE 512
 // The path, absolute or relative (to the cwd), to the .obj file to load.
-#define OBJECT_PATH "/home/sovietpancakes/Desktop/Code/gputest/knight.obj"
+#define OBJECT_PATH "knight.obj"
 // How much space there is inside the Cornell box between the model and the walls
 #define CORNELL_BREATHING_ROOM 100.0f
 // How many frames of video to render.

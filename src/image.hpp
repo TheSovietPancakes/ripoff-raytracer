@@ -2,10 +2,10 @@
 
 #include "math.hpp"
 #include "readobj.hpp"
+#include "settings.hpp"
 
 std::string loadKernelSource(/* const std::string& filename */) {
 #include "kernelsource.hpp"
-#include "settings.hpp"
   return kernel_source;
 }
 

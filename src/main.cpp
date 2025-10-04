@@ -12,6 +12,14 @@
 bool windowIsFocused = true;
 
 int main() {
+  std::cout << "Please enter a width, in pixels. For example, 1920, 3840, ...\n> " << std::flush;
+  std::cin >> WIDTH;
+  std::cout << "Please enter a height, in pixels. For example, 1080, 2160, ...\n> " << std::flush;
+  std::cin >> HEIGHT;
+  std::cout << "Please enter how many rays per pixel to shoot. Higher = better quality, but slower. 100-500 is a good trade-off.\n> " << std::flush;
+  std::cin >> RAYS_PER_PIXEL;
+  std::cout << "Please enter the maximum number of bounces per ray. Higher = better quality, but slower. 50+ is a good trade-off.\n> " << std::flush;
+  std::cin >> MAX_BOUNCE_COUNT;
   cl_int err;
 #ifndef RENDER_AND_GET_OUT
   err = glfwInit();

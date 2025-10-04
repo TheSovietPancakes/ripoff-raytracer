@@ -54,13 +54,6 @@ if(NOT OpenCL_FOUND)
   endif()
 endif()
 
-# Find GLFW using pkg-config
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(GLFW REQUIRED glfw3)
-
-# Find OpenGL
-find_package(OpenGL REQUIRED)
-
 set(TRACE_CL_SOURCE "src/Trace.cl")
 set(TRACE_CL_OUT "src/kernelsource.hpp")
 file(READ ${TRACE_CL_SOURCE} TRACE_CL_CONTENTS)
@@ -74,13 +67,15 @@ file(APPEND ${TRACE_CL_OUT} "const char* kernel_source = \"${TRACE_CL_CONTENTS}\
 # Add the executable
 add_executable(${PROJECT_NAME} src/main.cpp)
 
-# Include OpenCL headers
-include_directories(${OpenCL_INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME} ${GLFW_LIBRARIES} ${OPENGL_LIBRARIES})
-include_directories(${GLFW_INCLUDE_DIRS})
-target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW_CFLAGS_OTHER})
+# Include GLFW headers
+# find_package(PkgConfig REQUIRED)
+# pkg_check_modules(GLFW REQUIRED glfw3)
+# target_link_libraries(${PROJECT_NAME} ${GLFW_LIBRARIES} ${OPENGL_LIBRARIES})
+# include_directories(${GLFW_INCLUDE_DIRS})
+# target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW_CFLAGS_OTHER})
 
-# Link libraries
+# Include OpenCL
+include_directories(${OpenCL_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} ${OpenCL_LIBRARIES})
 
 # # ImGui sources
