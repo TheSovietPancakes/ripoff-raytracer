@@ -47,17 +47,19 @@ if(NOT OpenCL_FOUND)
     endif()
 
     if(NOT OpenCL_FOUND)
-      message(FATAL_ERROR "OpenCL not found. Please install OpenCL SDK.")
+      message(FATAL_ERROR "OpenCL not found. Please install the OpenCL SDK.")
     endif()
+  else()
+    message(FATAL_ERROR "OpenCL could not be found for your platform. Please install the OpenCL SDK.")
   endif()
 endif()
 
-# # Find GLFW using pkg-config
-# find_package(PkgConfig REQUIRED)
-# pkg_check_modules(GLFW REQUIRED glfw3)
+# Find GLFW using pkg-config
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GLFW REQUIRED glfw3)
 
-# # Find OpenGL
-# find_package(OpenGL REQUIRED)
+# Find OpenGL
+find_package(OpenGL REQUIRED)
 
 set(TRACE_CL_SOURCE "src/Trace.cl")
 set(TRACE_CL_OUT "src/kernelsource.hpp")
@@ -74,16 +76,23 @@ add_executable(${PROJECT_NAME} src/main.cpp)
 
 # Include OpenCL headers
 include_directories(${OpenCL_INCLUDE_DIRS})
-
-# # Include GLFW headers from pkg-config
-# include_directories(${GLFW_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME} ${GLFW_LIBRARIES} ${OPENGL_LIBRARIES})
+include_directories(${GLFW_INCLUDE_DIRS})
+target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW_CFLAGS_OTHER})
 
 # Link libraries
-# target_link_libraries(${PROJECT_NAME} ${GLFW_LIBRARIES} ${OPENGL_LIBRARIES})
 target_link_libraries(${PROJECT_NAME} ${OpenCL_LIBRARIES})
 
-# # Specify that the executable requires OpenCL and GLFW
-# target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW_CFLAGS_OTHER})
+# # ImGui sources
+# set(IMGUI_SOURCES external/imgui/imgui.cpp
+#                   external/imgui/imgui_draw.cpp
+#                   external/imgui/imgui_tables.cpp
+#                   external/imgui/imgui_widgets.cpp
+#                   external/imgui/backends/imgui_impl_glfw.cpp
+#                   external/imgui/backends/imgui_impl_opengl3.cpp)
+# add_library(imgui STATIC ${IMGUI_SOURCES})
+# # Include path
+# include_directories(external/imgui)
 
 # debug mode
 if(CMAKE_COMPILER_IS_GNUCXX)

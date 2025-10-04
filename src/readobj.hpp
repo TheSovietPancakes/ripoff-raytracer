@@ -1,6 +1,5 @@
 #pragma once
 
-#include <CL/cl.h>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -12,27 +11,7 @@
 #include <vector>
 
 #include <functional>
-
-using float3 = cl_float3;
-
-std::ostream& operator<<(std::ostream& os, const float3& v) {
-  os << "(" << v.s[0] << ", " << v.s[1] << ", " << v.s[2] << ")";
-  return os;
-}
-
-using float4 = cl_float4;
-
-// Commented out because float3 is just an alias of float4
-// std::ostream& operator<<(std::ostream& os, const float4& v) {
-//   os << "(" << v.s[0] << ", " << v.s[1] << ", " << v.s[2] << ", " << v.w << ")";
-//   return os;
-// }
-
-float3 operator+(const float3& a, const float3& b) { return {a.s[0] + b.s[0], a.s[1] + b.s[1], a.s[2] + b.s[2]}; }
-
-float3 operator-(const float3& a, const float3& b) { return {a.s[0] - b.s[0], a.s[1] - b.s[1], a.s[2] - b.s[2]}; }
-float3 operator*(const float3& a, const float b) { return {a.s[0] * b, a.s[1] * b, a.s[2] * b}; }
-float3 operator/(const float3& a, const float b) { return {a.s[0] / b, a.s[1] / b, a.s[2] / b}; }
+#include "math.hpp"
 
 typedef struct {
   float3 min = {CL_FLT_MAX, CL_FLT_MAX, CL_FLT_MAX};
@@ -411,7 +390,7 @@ void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color
                             .color = color,
                            .emissionColor = {0, 0, 0},
                            .emissionStrength = 0.0f,
-                           .reflectiveness = 0.0f,
+                           .reflectiveness = 1.0f,
                            .specularProbability = 1.0f,
                        }};
 

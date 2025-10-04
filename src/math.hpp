@@ -1,8 +1,13 @@
 #pragma once
 
-#include <vector>
-#include <string>
+// surpress warnings
+#define CL_TARGET_OPENCL_VERSION 300
+#include <CL/cl.h>
+using float3 = cl_float3;
 #include <fstream>
+#include <string>
+#include <vector>
+#include <cmath>
 
 struct HSV {
   double h, s, v; // Degrees, [0,1], [0,1]
@@ -73,6 +78,41 @@ RGB hsv2rgb(HSV in) {
 
 // ---
 
+std::ostream& operator<<(std::ostream& os, const float3& v) {
+  os << "(" << v.s[0] << ", " << v.s[1] << ", " << v.s[2] << ")";
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const cl_float2& v) {
+  os << "(" << v.s[0] << ", " << v.s[1] << ")";
+  return os;
+}
+
+using float4 = cl_float4;
+
+// Commented out because float3 is just an alias of float4
+// std::ostream& operator<<(std::ostream& os, const float4& v) {
+//   os << "(" << v.s[0] << ", " << v.s[1] << ", " << v.s[2] << ", " << v.w << ")";
+//   return os;
+// }
+
+float3 operator+(const float3& a, const float3& b) { return {a.s[0] + b.s[0], a.s[1] + b.s[1], a.s[2] + b.s[2]}; }
+float3 operator+=(float3& a, const float3& b) {
+  a.s[0] += b.s[0];
+  a.s[1] += b.s[1];
+  a.s[2] += b.s[2];
+  return a;
+}
+float3 operator/=(float3& a, const float b) {
+  a.s[0] /= b;
+  a.s[1] /= b;
+  a.s[2] /= b;
+  return a;
+}
+float3 operator-(const float3& a, const float3& b) { return {a.s[0] - b.s[0], a.s[1] - b.s[1], a.s[2] - b.s[2]}; }
+float3 operator*(const float3& a, const float b) { return {a.s[0] * b, a.s[1] * b, a.s[2] * b}; }
+float3 operator/(const float3& a, const float b) { return {a.s[0] / b, a.s[1] / b, a.s[2] / b}; }
+
 float lerp(float a, float b, float f) { return a + f * (b - a); }
 
 void placeImageDataIntoBMP(const std::vector<unsigned char>& pixels, int width, int height, const std::string& filename) {
@@ -122,4 +162,19 @@ void placeImageDataIntoBMP(const std::vector<unsigned char>& pixels, int width, 
     file.write(reinterpret_cast<char*>(padding.data()), padSize);
   }
   file.close();
+}
+
+float3 cross(const float3& a, const float3& b) {
+  return {a.s[1] * b.s[2] - a.s[2] * b.s[1], a.s[2] * b.s[0] - a.s[0] * b.s[2], a.s[0] * b.s[1] - a.s[1] * b.s[0]};
+}
+
+float3 normalize(float3 a, float3 b, float3 c) {
+  float3 edge1 = b - a;
+  float3 edge2 = c - a;
+  float3 n = cross(edge1, edge2);
+  float len = sqrt(n.s[0] * n.s[0] + n.s[1] * n.s[1] + n.s[2] * n.s[2]);
+  if (len > 0.0f) {
+    return n / len;
+  }
+  return {0.0f, 0.0f, 0.0f};
 }

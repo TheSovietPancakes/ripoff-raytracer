@@ -1,6 +1,4 @@
 // Render quality
-#define IncomingRaysPerPixel 300
-#define MaxBounceCount 30
 #define BVHStackSize 64
 
 // Math
@@ -73,11 +71,6 @@ typedef struct {
   float3 s0, s1, s2;
 } float3x3;
 
-inline void GrowBoundingBox(__private BoundingBox *box, Triangle tri) {
-  box->min = fmin(box->min, fmin(tri.posA, fmin(tri.posB, tri.posC)));
-  box->max = fmax(box->max, fmax(tri.posA, fmax(tri.posB, tri.posC)));
-}
-
 float3 clamp3(float3 v, float minVal, float maxVal) {
   return fmin(fmax(v, (float3)(minVal)), (float3)(maxVal));
 }
@@ -114,19 +107,6 @@ static inline float3x3 transpose_mat(const float3x3 m) {
   result.s1 = (float3)(m.s0.y, m.s1.y, m.s2.y);
   result.s2 = (float3)(m.s0.z, m.s1.z, m.s2.z);
   return result;
-}
-
-static inline float3x3 make_rotation_xyz(float pitch, float yaw, float roll) {
-  // same convention you used elsewhere; rows are the basis vectors
-  float cx = native_cos(pitch), sx = native_sin(pitch);
-  float cy = native_cos(yaw), sy = native_sin(yaw);
-  float cz = native_cos(roll), sz = native_sin(roll);
-
-  float3x3 m;
-  m.s0 = (float3)(cy * cz, cz * sy * sx - cx * sz, sx * sz + cx * cz * sy);
-  m.s1 = (float3)(cy * sz, cx * cz + sx * sy * sz, cx * sy * sz - cz * sx);
-  m.s2 = (float3)(-sy, cy * sx, cx * cy);
-  return m;
 }
 
 inline Ray WorldToLocalRay(Ray worldRay, float3x3 Rinv, float3 pos,
@@ -280,10 +260,9 @@ inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
   if (t <= EPSILON)
     return (HitInfo){.didHit = false};
 
-  // success: build hit
-  float w = 1.0f - u - v;
-  float3 n = tri.normalA * w + tri.normalB * u + tri.normalC * v;
-  n = fast_normalize(n); // cheaper than normalize()
+  // Calculate the triangle's normal using the cross product of its edges
+  float3 n = fast_normalize(tri.normalA * (1.0f - u - v) + tri.normalB * u +
+                            tri.normalC * v);
 
   if (dot(ray.direction, n) > 0.0f)
     return (HitInfo){.didHit = false};
@@ -409,7 +388,7 @@ HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
       continue;
 
     // Build rotation matrices
-    float3x3 R = make_rotation_xyz(info.pitch, info.yaw, info.roll);
+    float3x3 R = makeRotation(info.pitch, info.yaw, info.roll);
     float3x3 Rinv =
         transpose_mat(R); // Inverse for orthonormal matrix is transpose
 
@@ -438,10 +417,10 @@ HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
 
 float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
              int meshCount, __global const Triangle *triangles,
-             __global const Node *nodeList) {
+             __global const Node *nodeList, uint maxBounceCount) {
   float3 incomingLight = (float3)(0.0f, 0.0f, 0.0f);
   float3 throughput = (float3)(1.0f, 1.0f, 1.0f);
-  for (uint bounce = 0; bounce < MaxBounceCount; ++bounce) {
+  for (uint bounce = 0; bounce < maxBounceCount; ++bounce) {
     HitInfo hit = CalculateRayCollisionWithTriangle(ray, meshes, meshCount,
                                                     triangles, nodeList);
 
@@ -530,7 +509,8 @@ __kernel void raytrace(__global const MeshInfo *meshes,
                        __global const Triangle *triangles, int meshCount,
                        __global uchar4 *image, int width, int height,
                        CameraInformation camInfo, int frameIndex,
-                       __global const Node *nodeList) {
+                       __global const Node *nodeList, uint maxBounceCount,
+                       uint incomingRaysPerPixel) {
   uint x = get_global_id(0);
   uint y = get_global_id(1);
   uint pixelIndex = y * width + x;
@@ -541,10 +521,11 @@ __kernel void raytrace(__global const MeshInfo *meshes,
   Ray ray = MakeRay(camInfo, uv);
 
   float3 accum = (float3)(0.0f, 0.0f, 0.0f);
-  for (uint s = 0; s < IncomingRaysPerPixel; ++s) {
-    accum += Trace(ray, &rngState, meshes, meshCount, triangles, nodeList);
+  for (uint s = 0; s < incomingRaysPerPixel; ++s) {
+    accum += Trace(ray, &rngState, meshes, meshCount, triangles, nodeList,
+                   maxBounceCount);
   }
-  float3 pixelColor = accum / (float)IncomingRaysPerPixel;
+  float3 pixelColor = accum / (float)incomingRaysPerPixel;
 
   // gamma and clamp
   pixelColor = clamp(pixelColor, 0.0f, 1.0f);
@@ -553,5 +534,50 @@ __kernel void raytrace(__global const MeshInfo *meshes,
 
   image[pixelIndex] =
       (uchar4)((uchar)(pixelColor.x * 255.0f), (uchar)(pixelColor.y * 255.0f),
-               (uchar)(pixelColor.z * 255.0f), 255u);
+               (uchar)(pixelColor.z * 255.0f), 0);
+}
+
+__kernel void checkIntersectingRay(__global const MeshInfo *meshList,
+                                   int meshCount,
+                                   __global const Triangle *triangleList,
+                                   __global const Node *nodeList,
+                                   CameraInformation camInfo, float2 uv,
+                                   __global int *outMeshIdx) {
+  Ray ray = MakeRay(camInfo, uv);
+
+  float closestDst = INFINITY;
+  int closestMesh = -1;
+
+  for (int meshIdx = 0; meshIdx < meshCount; ++meshIdx) {
+    MeshInfo info = meshList[meshIdx];
+
+    // Skip degenerate meshes
+    if (info.scale <= EPSILON)
+      continue;
+
+    // Build rotation matrices
+    float3x3 R = makeRotation(info.pitch, info.yaw, info.roll);
+    float3x3 Rinv =
+        transpose_mat(R); // Inverse for orthonormal matrix is transpose
+
+    // Transform ray to local space
+    Ray localRay = WorldToLocalRay(ray, Rinv, info.pos, info.scale);
+
+    // Perform intersection test in local space
+    HitInfo localHit =
+        RayTriangleBVH(info.nodeIdx, localRay, nodeList, triangleList);
+    if (localHit.didHit) {
+      // Transform hit back to world space
+      HitInfo worldHit =
+          LocalToWorldHit(localHit, R, info.pos, info.scale, ray);
+
+      // Update closest hit if this is closer
+      if (worldHit.dst < closestDst) {
+        closestDst = worldHit.dst;
+        closestMesh = meshIdx;
+      }
+    }
+  }
+
+  *outMeshIdx = closestMesh;
 }

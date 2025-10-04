@@ -1,9 +1,12 @@
-#include "settings.hpp"
 #include "image.hpp"
+#include "settings.hpp"
 
 #ifndef RENDER_AND_GET_OUT
 #include <GLFW/glfw3.h>
 #endif
+// #include "backends/imgui_impl_glfw.h"
+// #include "backends/imgui_impl_opengl3.h"
+// #include "imgui.h"
 #include <numeric>
 
 bool windowIsFocused = true;
@@ -18,6 +21,10 @@ int main() {
   }
   GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "GPU Test", nullptr, nullptr);
   glfwMakeContextCurrent(window);
+  ImGui::CreateContext();
+  ImGui::StyleColorsDark();
+  ImGui_ImplGlfw_InitForOpenGL(window, true);
+  ImGui_ImplOpenGL3_Init("#version 130");
 #else
   // Do this step first, before we allocate anything important:
   // Check if the output directory for video frames exists
@@ -140,7 +147,6 @@ int main() {
     std::cerr << "Build log:\n" << log.data() << std::endl;
     return 1;
   }
-
   cl_kernel kernel = clCreateKernel(program, "raytrace", &err);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to create kernel\n";
@@ -150,10 +156,10 @@ int main() {
   mesh.material = {
       .type = MaterialType_Solid,
       .color = {0.8, 0.8, 0.8},
-      .emissionColor = {0.0f, 0.0f, 0.0f},
+      .emissionColor = {1.0f, 1.0f, 1.0f},
       .emissionStrength = 0.0f,
-      .reflectiveness = 0.0f,
-      .specularProbability = 0.0f,
+      .reflectiveness = 0.7f,
+      .specularProbability = 1.0f,
   };
   mesh.yaw = 1.5f;
   // KNIGHT
@@ -206,90 +212,159 @@ int main() {
     std::cerr << "failed to set kernel arg num frames: " << err << std::endl;
     return 1;
   }
+  cl_uint bounceCount = MAX_BOUNCE_COUNT;
+  cl_uint raysPerPixel = RAYS_PER_PIXEL;
+  err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg rays per pixel: " << err << std::endl;
+    return 1;
+  }
 
   err = clFinish(queue);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to finish command queue: " << err << std::endl;
     return 1;
   }
+  Buffers buffers;
 #ifndef RENDER_AND_GET_OUT
   std::chrono::high_resolution_clock::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
   glfwSetWindowFocusCallback(window, [](GLFWwindow* win, int focused) { windowIsFocused = focused != 0; });
-  bool isRendering = false;
   size_t global[2] = {WIDTH, HEIGHT};
+  buffers = generateBuffers(triangleList, meshList, nodeList, ctx, kernel);
+  bool shouldRefreshBuffers = false;
+  // COMPLETELY IGNORE the buffers.imageBuffer here, as we will
+  // average frames together in here :)
+  int selectedMeshIdx = -1;
+  std::vector<float3> intBuffer(WIDTH * HEIGHT, {0.0f, 0.0f, 0.0f});
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    ImGui::Begin("Settings");
     // Camera movement
     // Arrow keys will rotate the camera (pitch, yaw) while
     // QE will move the camera up/down along Y axis
     // WASD will function like a game (W forward, S back, A left, D right)
-    // Note: no roll implemented
-    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !isRendering) {
-      // "R"ender by averaging frames together
-      isRendering = true;
-      numFrames = 1;
-    }
 
-    if (isRendering) {
-      static std::vector<uint32_t> intBuffer;
-      if (intBuffer.size() != pixels.size()) {
-        intBuffer.assign(pixels.size(), 0u);
-        numFrames = 1; // no frames accumulated yet
-      }
+    if (shouldRefreshBuffers) {
+      releaseBuffers(buffers);
+      buffers = generateBuffers(triangleList, meshList, nodeList, ctx, kernel);
+      shouldRefreshBuffers = false;
+      numFrames = 0;
+      intBuffer.assign(intBuffer.size(), {0.0f, 0.0f, 0.0f});
+      // Map the mesh buffer to host memory
+      if (selectedMeshIdx >= 0 && selectedMeshIdx < (int)meshList.size()) {
 
-      if (numFrames >= FRAME_TOTAL) {
-        // finished: output final image
-        std::vector<unsigned char> finalImg(pixels.size());
-        for (size_t i = 0; i < pixels.size(); ++i) {
-          finalImg[i] = static_cast<unsigned char>(std::min<uint32_t>(255u, intBuffer[i] / numFrames));
+        MeshInfo* hostMeshBuffer = (MeshInfo*)clEnqueueMapBuffer(queue, buffers.meshBuffer, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0,
+                                                                 sizeof(MeshInfo) * meshList.size(), 0, nullptr, nullptr, &err);
+        if (err != CL_SUCCESS) {
+          std::cerr << "Failed to map mesh buffer: " << err << std::endl;
+          return 1;
         }
-        std::cout << "\rRendering complete, saving output.bmp" << std::endl;
-        placeImageDataIntoBMP(finalImg, WIDTH, HEIGHT, "output.bmp");
-        isRendering = false;
-        continue;
-      }
 
-      // --- Run kernel with a seed derived from numFrames
-      err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
-        break;
-      }
-      err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
-        break;
-      }
-      err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to enqueue kernel: " << err << std::endl;
-        break;
-      }
-      err = clFinish(queue); // safer than flush when reading back
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to finish command queue: " << err << std::endl;
-        break;
-      }
-      err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to read buffer: " << err << std::endl;
-        break;
-      }
-      for (size_t i = 0; i < pixels.size(); ++i) {
-        intBuffer[i] += pixels[i];
-      }
+        // Modify the selected mesh's material color
+        hostMeshBuffer[selectedMeshIdx].material.color = {1.0f, 0.0f, 0.0f};
 
-      // Progressive display
-      std::vector<unsigned char> accumBuffer(pixels.size());
-      for (size_t i = 0; i < pixels.size(); ++i) {
-        accumBuffer[i] = static_cast<unsigned char>(intBuffer[i] / numFrames);
+        // Unmap the buffer
+        err = clEnqueueUnmapMemObject(queue, buffers.meshBuffer, hostMeshBuffer, 0, nullptr, nullptr);
+        if (err != CL_SUCCESS) {
+          std::cerr << "Failed to unmap mesh buffer: " << err << std::endl;
+          return 1;
+        }
+        err = clFinish(queue);
+        if (err != CL_SUCCESS) {
+          std::cerr << "Failed to finish command queue after unmapping: " << err << std::endl;
+          return 1;
+        }
       }
-      glBindTexture(GL_TEXTURE_2D, texture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, accumBuffer.data());
-      numFrames++;
-      std::cout << "\rRendering frame " << numFrames << " of " << FRAME_TOTAL << "..." << std::flush;
     }
 
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS && windowIsFocused) {
+      // Get mouse position, relative to window and WIDTH/HEIGHT
+      double mouseX, mouseY;
+      glfwGetCursorPos(window, &mouseX, &mouseY);
+      // Spawn the test kernel
+      cl_kernel testKernel = clCreateKernel(program, "checkIntersectingRay", &err);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to create test kernel\n";
+        return 1;
+      }
+      /*
+      __kernel void checkIntersectingRay(__global const MeshInfo *meshList,
+                                   int meshCount,
+                                   __global const Triangle *triangleList,
+                                   __global const Node *nodeList,
+                                   CameraInformation camInfo, float2 uv,
+                                   __global int *outMeshIdx)
+      */
+      err = clSetKernelArg(testKernel, 0, sizeof(cl_mem), &buffers.meshBuffer);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to set test kernel arg mesh buffer: " << err << std::endl;
+        return 1;
+      }
+      cl_int meshCount = (cl_int)meshList.size();
+      err = clSetKernelArg(testKernel, 1, sizeof(cl_int), &meshCount);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to set test kernel arg mesh count: " << err << std::endl;
+        return 1;
+      }
+      err = clSetKernelArg(testKernel, 2, sizeof(cl_mem), &buffers.triangleBuffer);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to set test kernel arg triangle buffer: " << err << std::endl;
+        return 1;
+      }
+      err = clSetKernelArg(testKernel, 3, sizeof(cl_mem), &buffers.nodeBuffer);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to set test kernel arg node buffer: " << err << std::endl;
+        return 1;
+      }
+      err = clSetKernelArg(testKernel, 4, sizeof(CameraInformation), &camInfo);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to set test kernel arg camera information: " << err << std::endl;
+        return 1;
+      }
+      cl_float2 uv = {(float)mouseX / (float)WIDTH, (float)mouseY / (float)HEIGHT};
+      err = clSetKernelArg(testKernel, 5, sizeof(cl_float2), &uv);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to set test kernel arg UV coordinates: " << err << std::endl;
+        return 1;
+      }
+      cl_int outMeshIdx = -1;
+      cl_mem outMeshIdxBuffer = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(cl_int), &outMeshIdx, &err);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to create output mesh index buffer: " << err << std::endl;
+        return 1;
+      }
+      err = clSetKernelArg(testKernel, 6, sizeof(cl_mem), &outMeshIdxBuffer);
+      if (err != CL_SUCCESS) {
+        std::cerr << "failed to set test kernel arg output mesh index buffer: " << err << std::endl;
+        return 1;
+      }
+      size_t onePixel[2] = {1, 1};
+      err = clEnqueueNDRangeKernel(queue, testKernel, 2, nullptr, onePixel, nullptr, 0, nullptr, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to enqueue test kernel: " << err << std::endl;
+        return 1;
+      }
+      err = clEnqueueReadBuffer(queue, outMeshIdxBuffer, CL_TRUE, 0, sizeof(cl_int), &outMeshIdx, 0, nullptr, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to read output mesh index buffer: " << err << std::endl;
+        return 1;
+      }
+      clReleaseMemObject(outMeshIdxBuffer);
+      clReleaseKernel(testKernel);
+      if (selectedMeshIdx != outMeshIdx) {
+        selectedMeshIdx = outMeshIdx;
+        shouldRefreshBuffers = true;
+      }
+      // Make sure commands have been submitted to the device
+      err = clFinish(queue);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to finish command queue after test kernel: " << err << std::endl;
+        return 1;
+      }
+    }
     std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration deltaTime = nowTime - lastRecordedTime;
     unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(deltaTime).count();
@@ -301,86 +376,112 @@ int main() {
       std::this_thread::sleep_for(std::chrono::milliseconds(17));
       continue;
     }
-    if (!isRendering) {
-      numFrames++; // change the seed even if not rendering
-      float deltaSeconds = (float)millisecondsPassed / 1000.0f;
-      const float moveSpeed = 60.0f;
-      const float rotSpeed = 1.5f; // Reduced from 6.0f for more reasonable rotation speed
+    numFrames++; // change the seed even if not rendering
+    float deltaSeconds = (float)millisecondsPassed / 1000.0f;
+    const float moveSpeed = 100.0f;
+    const float rotSpeed = 1.5f; // Reduced from 6.0f for more reasonable rotation speed
 
-      if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        camInfo.position.x += moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
-        camInfo.position.z += moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        camInfo.position.x -= moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
-        camInfo.position.z -= moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        camInfo.position.x -= moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
-        camInfo.position.z += moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-        camInfo.position.x += moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
-        camInfo.position.z -= moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) {
-        camInfo.position.y -= moveSpeed * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
-        camInfo.position.y += moveSpeed * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
-        camInfo.pitch -= rotSpeed * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
-        camInfo.pitch += rotSpeed * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
-        camInfo.yaw -= rotSpeed * deltaSeconds;
-      }
-      if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
-        camInfo.yaw += rotSpeed * deltaSeconds;
-      }
-      // Update camera info arg
-      err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
-        break;
-      }
-      err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
-        break;
-      }
-      // Enqueue kernel
-      err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to enqueue kernel: " << err << std::endl;
-        break;
-      }
-
-      // Make sure commands have been submitted to the device
-      err = clFlush(queue);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to flush command queue: " << err << std::endl;
-        break;
-      }
-
-      // Blocking read: make sure we read the exact number of bytes
-      size_t bytesToRead = pixels.size() * sizeof(unsigned char);
-      // Optional: glFinish() to avoid driver-side GL <-> CL race (if GL interop later)
-      glFinish();
-
-      err = clEnqueueReadBuffer(queue, imageBuffer, CL_TRUE, 0, bytesToRead, pixels.data(), 0, nullptr, nullptr);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to read buffer: " << err << std::endl;
-        break;
-      }
-      // Upload to the bound OpenGL texture (bind to be explicit)
-      glBindTexture(GL_TEXTURE_2D, texture);
-      // Use GL_RGBA8 internal format explicitly
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.position.s[0] += moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
+      camInfo.position.s[2] += moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
     }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.position.s[0] -= moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
+      camInfo.position.s[2] -= moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.position.s[0] -= moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
+      camInfo.position.s[2] += moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.position.s[0] += moveSpeed * std::cos(camInfo.yaw) * deltaSeconds;
+      camInfo.position.s[2] -= moveSpeed * std::sin(camInfo.yaw) * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.position.s[1] -= moveSpeed * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.position.s[1] += moveSpeed * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.pitch -= rotSpeed * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.pitch += rotSpeed * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.yaw -= rotSpeed * deltaSeconds;
+    }
+    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+      shouldRefreshBuffers = true;
+      camInfo.yaw += rotSpeed * deltaSeconds;
+    }
+    // Update camera info arg
+    err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
+    }
+    err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
+    }
+    err = clSetKernelArg(kernel, 9, sizeof(cl_int), &bounceCount);
+    if (err != CL_SUCCESS) {
+      std::cerr << "failed to set kernel arg bounce count: " << err << std::endl;
+      return 1;
+    }
+    err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
+    if (err != CL_SUCCESS) {
+      std::cerr << "failed to set kernel arg rays per pixel: " << err << std::endl;
+      return 1;
+    }
+    // Enqueue kernel
+    err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to enqueue kernel: " << err << std::endl;
+      break;
+    }
+
+    // Make sure commands have been submitted to the device
+    err = clFlush(queue);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to flush command queue: " << err << std::endl;
+      break;
+    }
+
+    // Blocking read: make sure we read the exact number of bytes
+    size_t bytesToRead = pixels.size() * sizeof(unsigned char);
+    // Optional: glFinish() to avoid driver-side GL <-> CL race (if GL interop later)
+    glFinish();
+
+    err = clEnqueueReadBuffer(queue, buffers.imageBuffer, CL_TRUE, 0, bytesToRead, pixels.data(), 0, nullptr, nullptr);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to read buffer: " << err << std::endl;
+      break;
+    }
+    // ADD!!! buffers.imageBuffer to intCLBuffer
+    for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
+      intBuffer[i].s[0] += pixels[i * 4 + 0];
+      intBuffer[i].s[1] += pixels[i * 4 + 1];
+      intBuffer[i].s[2] += pixels[i * 4 + 2];
+
+      pixels[i * 4 + 0] = (unsigned char)(intBuffer[i].s[0] / numFrames);
+      pixels[i * 4 + 1] = (unsigned char)(intBuffer[i].s[1] / numFrames);
+      pixels[i * 4 + 2] = (unsigned char)(intBuffer[i].s[2] / numFrames);
+    }
+    // Upload to the bound OpenGL texture (bind to be explicit)
+    glBindTexture(GL_TEXTURE_2D, texture);
+    // Use GL_RGBA8 internal format explicitly
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 
     // Render quad
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -411,6 +512,33 @@ int main() {
     glEnd();
     glDisable(GL_TEXTURE_2D);
 
+    // ImGUI stuff
+    ImGui::Text("FPS: %ld", millisecondsPassed > 0 ? 1000 / millisecondsPassed : 0);
+    ImGui::Text("Frames averaged: %d", numFrames);
+    ImGui::Text("Camera Position: (%.1f, %.1f, %.1f)", camInfo.position.s[0], camInfo.position.s[1], camInfo.position.s[2]);
+    ImGui::Text("Camera Pitch: %.2f", camInfo.pitch);
+    ImGui::Text("Camera Yaw: %.2f", camInfo.yaw);
+    ImGui::Text("Camera Roll: %.2f", camInfo.roll);
+    ImGui::Text("Move: WASD, QE (up/down), Rotate: Arrows");
+    ImGui::SliderInt("Rays per pixel", (int*)&raysPerPixel, 1, 64);
+    ImGui::SliderInt("Max bounce count", (int*)&bounceCount, 1, 20);
+    if (ImGui::Button("Reset View")) {
+      camInfo.position = {CAMERA_START_X, CAMERA_START_Y, CAMERA_START_Z};
+      camInfo.pitch = CAMERA_START_PITCH;
+      camInfo.yaw = CAMERA_START_YAW;
+      camInfo.roll = CAMERA_START_ROLL;
+      shouldRefreshBuffers = true;
+    }
+    if (ImGui::Button("Refresh Buffers")) {
+      shouldRefreshBuffers = true;
+    }
+    ImGui::Text("Triangles: %zu", triangleList.size());
+    ImGui::Text("Meshes: %zu", meshList.size());
+    ImGui::Text("Top-level nodes: %zu", nodeList.size());
+    ImGui::End();
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
     glfwSwapBuffers(window);
 
     err = clFinish(queue);
@@ -422,7 +550,26 @@ int main() {
   // Cleanup
   glDeleteTextures(1, &texture);
 #else
-  Buffers buffers;
+  err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 9, sizeof(cl_int), &bounceCount);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg bounce count: " << err << std::endl;
+    return 1;
+  }
+  err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
+  if (err != CL_SUCCESS) {
+    std::cerr << "failed to set kernel arg rays per pixel: " << err << std::endl;
+    return 1;
+  }
   if (VIDEO_FRAME_COUNT > 1) {
     // Loop it as if this were a video!
     int videoFrameIdx = 0;
@@ -469,6 +616,9 @@ int main() {
     return 1;
   }
 #ifndef RENDER_AND_GET_OUT
+  ImGui_ImplOpenGL3_Shutdown();
+  ImGui_ImplGlfw_Shutdown();
+  ImGui::DestroyContext();
   glfwDestroyWindow(window);
   glfwTerminate();
 #endif

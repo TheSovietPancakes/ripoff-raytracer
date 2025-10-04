@@ -13,6 +13,7 @@ Obviously, it depends on what platform you're going to build to. So, refer to yo
 1. Open a new Powershell window as Administrator.
 2. Go to the directory where this repository has been cloned using the `cd` command followed by the path (e.g. `cd C:\path\to\repo`).
 3. From within that folder, run this nice build script I made for by doing `.\windows.ps1`.
+3.1. ONLY run this script if you have not installed Chocolatey, CMake, Make, and OpenCL. Otherwise, you can skip this altogether.
 4. Wait a good couple seconds. It will check and install Chocolatey, CMake, Make, and check for OpenCL.
 5. After you see "Hit enter to continue," press Enter.
 6. Now, you should close the Powershell window and open a new CMD/Powershell window (it doesn't need to be admin this time) to refresh the PATH, if anything was installed.

@@ -5,6 +5,7 @@
 
 std::string loadKernelSource(/* const std::string& filename */) {
 #include "kernelsource.hpp"
+#include "settings.hpp"
   return kernel_source;
 }
 
@@ -24,7 +25,6 @@ Buffers generateBuffers(std::vector<Triangle>& triangleList, std::vector<MeshInf
     std::cerr << "Failed to create triangle buffer\n";
     exit(1);
   }
-  std::chrono::high_resolution_clock::time_point meshEndTime = std::chrono::high_resolution_clock::now();
   cl_mem meshBuffer = clCreateBuffer(ctx, CL_MEM_COPY_HOST_PTR, meshList.size() * sizeof(MeshInfo), meshList.data(), &err);
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to create mesh buffer\n";
@@ -96,27 +96,36 @@ Buffers generateBuffers(std::vector<Triangle>& triangleList, std::vector<MeshInf
   return {triangleBuffer, meshBuffer, imageBuffer, nodeBuffer};
 }
 
+cl_int tryFreeMemoryObject(cl_mem& memobj) {
+  if (memobj) {
+    cl_int err = clReleaseMemObject(memobj);
+    memobj = nullptr;
+    return err;
+  }
+  return CL_SUCCESS;
+}
+
 cl_int releaseBuffers(Buffers& buffers) {
   cl_int err = CL_SUCCESS;
-  err = clReleaseMemObject(buffers.triangleBuffer);
+  err = tryFreeMemoryObject(buffers.triangleBuffer);
   buffers.triangleBuffer = nullptr;
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to release triangle buffer\n";
     return err;
   }
-  err = clReleaseMemObject(buffers.meshBuffer);
+  err = tryFreeMemoryObject(buffers.meshBuffer);
   buffers.meshBuffer = nullptr;
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to release mesh buffer\n";
     return err;
   }
-  err = clReleaseMemObject(buffers.imageBuffer);
+  err = tryFreeMemoryObject(buffers.imageBuffer);
   buffers.imageBuffer = nullptr;
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to release image buffer\n";
     return err;
   }
-  err = clReleaseMemObject(buffers.nodeBuffer);
+  err = tryFreeMemoryObject(buffers.nodeBuffer);
   buffers.nodeBuffer = nullptr;
   if (err != CL_SUCCESS) {
     std::cerr << "Failed to release node buffer\n";
@@ -258,7 +267,7 @@ void accumulateAndRenderFrame(std::vector<unsigned char>& pixels, cl_uint& numFr
 // allowing you to modify the scene (e.g. moving the model smoothly around the scene.)
 void setupNextVideoFrame(CameraInformation& camInfo, int frameIndex) {
   // Simple scene: Increase 3d model's yaw
-  const float anglePerFrame = (2.0f * 3.14159265359f) / (float)VIDEO_FRAME_COUNT;
+  const float anglePerFrame = (3.14159265359f * 2.0f) / (float)VIDEO_FRAME_COUNT;
   const float currentRotation = anglePerFrame * (float)frameIndex;
   MeshInfo& mesh = meshList.back();
   mesh.yaw = currentRotation + 1.5f; // Add 1.5f so if only rendering 1 frame, it starts out cool
@@ -291,7 +300,7 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
       .color = {0.07, 0.07, 0.07},
       .emissionColor = {0.1, 0.1, 0.1},
       .emissionStrength = 40.0f,
-      .reflectiveness = 0.0f,
+      .reflectiveness = 0.7f,
       .specularProbability = 1.0f,
   };
 
