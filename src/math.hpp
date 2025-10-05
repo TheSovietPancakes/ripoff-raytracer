@@ -1,8 +1,6 @@
 #pragma once
 
 // surpress warnings
-#define CL_TARGET_OPENCL_VERSION 300
-#include <CL/cl.h>
 using float3 = cl_float3;
 #include <fstream>
 #include <string>

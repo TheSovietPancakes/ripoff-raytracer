@@ -12,6 +12,10 @@
 bool windowIsFocused = true;
 
 int main() {
+  if (!std::filesystem::exists(OBJECT_PATH)) {
+    std::cerr << "OBJ file does not exist: " << OBJECT_PATH << std::endl;
+    return 1;
+  }
   cl_int err;
 #ifndef RENDER_AND_GET_OUT
   err = glfwInit();
@@ -51,6 +55,87 @@ int main() {
     }
   }
 #endif
+  cl_uint numPlatforms;
+  err = clGetPlatformIDs(0, nullptr, &numPlatforms);
+  if (err != CL_SUCCESS || numPlatforms == 0) {
+    std::cerr << "Failed to find any OpenCL platforms: " << getCLErrorString(err) << "\n";
+    return 1;
+  }
+  std::vector<cl_platform_id> platforms(numPlatforms);
+  err = clGetPlatformIDs(numPlatforms, platforms.data(), nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get OpenCL platform IDs: " << getCLErrorString(err) << "\n";
+    return 1;
+  }
+
+  cl_platform_id platform = platforms[0]; // Pick one lol
+  char version[128];
+  clGetPlatformInfo(platform, CL_PLATFORM_VERSION, sizeof(version), version, nullptr);
+  std::cout << "OpenCL Version: " << version << std::endl;
+
+  cl_uint numDevices;
+  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get number of OpenCL devices: " << getCLErrorString(err) << "\n";
+    return 1;
+  }
+  std::vector<cl_device_id> devices(numDevices);
+  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices.data(), nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get OpenCL device IDs: " << getCLErrorString(err) << "\n";
+    return 1;
+  }
+  cl_device_id device = devices[0]; // Pick one lol
+
+  // --- get device info
+  cl_uint compUnits = 0;
+  cl_ulong globalMem = 0;
+  err = clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), &compUnits, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get device info (" << std::hex << device << std::dec << " (CL_DEVICE_MAX_COMPUTE_UNITS): " << getCLErrorString(err) << "\n";
+    return 1;
+  }
+  err = clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(cl_ulong), &globalMem, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to get device info (" << std::hex << device << std::dec << " (CL_DEVICE_GLOBAL_MEM_SIZE): " << getCLErrorString(err) << "\n";
+    return 1;
+  }
+#if !defined(NODEBUG) && !defined(_NODEBUG)
+  {
+    for (size_t i = 0; i < devices.size(); i++) {
+      cl_device_id deviceFromList = devices[i];
+      char deviceName[128];
+      char deviceVendor[128];
+      cl_device_type deviceType;
+      err = clGetDeviceInfo(deviceFromList, CL_DEVICE_NAME, sizeof(deviceName), deviceName, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to get device info (" << std::hex << deviceFromList << std::dec << " (CL_DEVICE_NAME): " << getCLErrorString(err) << "\n";
+        return 1;
+      }
+      err = clGetDeviceInfo(deviceFromList, CL_DEVICE_TYPE, sizeof(deviceType), &deviceType, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to get device info (" << std::hex << deviceFromList << std::dec << " (CL_DEVICE_TYPE): " << getCLErrorString(err) << "\n";
+        return 1;
+      }
+      err = clGetDeviceInfo(deviceFromList, CL_DEVICE_VENDOR, sizeof(deviceVendor), deviceVendor, nullptr);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to get device info (" << std::hex << deviceFromList << std::dec << " (CL_DEVICE_VENDOR): " << getCLErrorString(err) << "\n";
+        return 1;
+      }
+      std::cout << "Device " << (i + 1) << " of " << devices.size() << " (" << std::hex << deviceFromList << std::dec << "): " << deviceName;
+      if (device == deviceFromList) {
+        std::cout << " [SELECTED]";
+      }
+      std::cout << "\n";
+      std::cout << "Compute Units: " << compUnits << "\n";
+      std::cout << "Global Memory: " << globalMem / (1024 * 1024) << " MB\n";
+      std::cout << "Device Type: " << (deviceType == CL_DEVICE_TYPE_GPU ? "GPU" : deviceType == CL_DEVICE_TYPE_CPU ? "CPU" : "Other") << "\n";
+      std::cout << "Device Vendor: " << deviceVendor << "\n";
+    }
+    std::cout << "-----------------------------------\n";
+  }
+#endif
+  
   std::cout << "Please enter a width, in pixels. For example, 1920, 3840, ...\n> " << std::flush;
   std::cin >> WIDTH;
   std::cout << "Please enter a height, in pixels. For example, 1080, 2160, ...\n> " << std::flush;
@@ -68,106 +153,28 @@ int main() {
     TILE_SIZE = std::min(WIDTH, HEIGHT);
     std::cout << "Invalid tile size, using " << TILE_SIZE << " instead.\n";
   }
-  
-  cl_uint numPlatforms;
-  err = clGetPlatformIDs(0, nullptr, &numPlatforms);
-  if (err != CL_SUCCESS || numPlatforms == 0) {
-    std::cerr << "Failed to find any OpenCL platforms\n";
-    return 1;
-  }
-  std::vector<cl_platform_id> platforms(numPlatforms);
-  err = clGetPlatformIDs(numPlatforms, platforms.data(), nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get OpenCL platform IDs\n";
-    return 1;
-  }
-
-  cl_platform_id platform = platforms[0]; // Pick one lol
-  char version[128];
-  clGetPlatformInfo(platform, CL_PLATFORM_VERSION, sizeof(version), version, nullptr);
-  std::cout << "OpenCL Version: " << version << std::endl;
-
-  cl_uint numDevices;
-  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get number of OpenCL devices\n";
-    return 1;
-  }
-  std::vector<cl_device_id> devices(numDevices);
-  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices.data(), nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get OpenCL device IDs\n";
-    return 1;
-  }
-  cl_device_id device = devices[0]; // Pick one lol
-
-  // --- get device info
-  cl_uint compUnits = 0;
-  cl_ulong globalMem = 0;
-  err = clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), &compUnits, nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get device info\n";
-    return 1;
-  }
-  err = clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(cl_ulong), &globalMem, nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get device info\n";
-    return 1;
-  }
-#if !defined(NODEBUG) && !defined(_NODEBUG)
-  {
-    char deviceName[128];
-    char deviceVendor[128];
-    cl_device_type deviceType;
-    err = clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(deviceName), deviceName, nullptr);
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to get device info\n";
-      return 1;
-    }
-    err = clGetDeviceInfo(device, CL_DEVICE_TYPE, sizeof(deviceType), &deviceType, nullptr);
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to get device info\n";
-      return 1;
-    }
-    err = clGetDeviceInfo(device, CL_DEVICE_VENDOR, sizeof(deviceVendor), deviceVendor, nullptr);
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to get device info\n";
-      return 1;
-    }
-    std::cout << "Using device: " << deviceName << "\n";
-    std::cout << "Compute Units: " << compUnits << "\n";
-    std::cout << "Global Memory: " << globalMem / (1024 * 1024) << " MB\n";
-    std::cout << "Device Type: " << (deviceType == CL_DEVICE_TYPE_GPU ? "GPU" : deviceType == CL_DEVICE_TYPE_CPU ? "CPU" : "Other") << "\n";
-    std::cout << "Device Vendor: " << deviceVendor << "\n";
-    std::cout << "-----------------------------------\n";
-  }
-#endif
 
   cl_context ctx = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create context\n";
+    std::cerr << "Failed to create context: " << getCLErrorString(err) << "\n";
     return 1;
   }
   cl_command_queue queue = clCreateCommandQueueWithProperties(ctx, device, nullptr, &err);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create command queue\n";
-    return 1;
-  }
-  if (!std::filesystem::exists(OBJECT_PATH)) {
-    std::cerr << "OBJ file does not exist: " << OBJECT_PATH << std::endl;
+    std::cerr << "Failed to create command queue: " << getCLErrorString(err) << "\n";
     return 1;
   }
   std::string kernelSource = loadKernelSource();
   const char* data = kernelSource.data();
   cl_program program = clCreateProgramWithSource(ctx, 1, &data, nullptr, &err);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create program\n";
+    std::cerr << "Failed to create program: " << getCLErrorString(err) << "\n";
     return 1;
   }
   const char* buildOptions = "-cl-fast-relaxed-math -cl-mad-enable"; // Fast math yay
   err = clBuildProgram(program, 1, &device, buildOptions, nullptr, nullptr);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to build program\n";
+    std::cerr << "Failed to build program: " << getCLErrorString(err) << "\n";
     size_t logSize;
     clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
     std::vector<char> log(logSize);
@@ -177,7 +184,7 @@ int main() {
   }
   cl_kernel kernel = clCreateKernel(program, "raytrace", &err);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create kernel\n";
+    std::cerr << "Failed to create kernel: " << getCLErrorString(err) << "\n";
     return 1;
   }
   MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
@@ -191,11 +198,11 @@ int main() {
   };
   mesh.yaw = 1.5f;
   // KNIGHT
-  // mesh.scale = 0.5f;
+  mesh.scale = 0.5f;
   // DRAGON
-  mesh.pos.s[1] += 60.0f;
-  mesh.scale = 200.0f;
-  CAMERA_START_Y -= 60.0f;
+  // mesh.pos.s[1] += 60.0f;
+  // mesh.scale = 200.0f;
+  // CAMERA_START_Y -= 60.0f;
 
   addCornellBoxToScene(mesh);
 
@@ -233,26 +240,26 @@ int main() {
 
   err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg camera information: " << err << std::endl;
+    std::cerr << "failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   cl_uint numFrames = 0;
   err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg num frames: " << err << std::endl;
+    std::cerr << "failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   cl_uint bounceCount = MAX_BOUNCE_COUNT;
   cl_uint raysPerPixel = RAYS_PER_PIXEL;
   err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg rays per pixel: " << err << std::endl;
+    std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
     return 1;
   }
 
   err = clFinish(queue);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to finish command queue: " << err << std::endl;
+    std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   Buffers buffers;
@@ -289,7 +296,7 @@ int main() {
         MeshInfo* hostMeshBuffer = (MeshInfo*)clEnqueueMapBuffer(queue, buffers.meshBuffer, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0,
                                                                  sizeof(MeshInfo) * meshList.size(), 0, nullptr, nullptr, &err);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to map mesh buffer: " << err << std::endl;
+          std::cerr << "Failed to map mesh buffer: " << getCLErrorString(err) << std::endl;
           return 1;
         }
 
@@ -299,12 +306,12 @@ int main() {
         // Unmap the buffer
         err = clEnqueueUnmapMemObject(queue, buffers.meshBuffer, hostMeshBuffer, 0, nullptr, nullptr);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to unmap mesh buffer: " << err << std::endl;
+          std::cerr << "Failed to unmap mesh buffer: " << getCLErrorString(err) << std::endl;
           return 1;
         }
         err = clFinish(queue);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to finish command queue after unmapping: " << err << std::endl;
+          std::cerr << "Failed to finish command queue after unmapping: " << getCLErrorString(err) << std::endl;
           return 1;
         }
       }
@@ -330,56 +337,56 @@ int main() {
       */
       err = clSetKernelArg(testKernel, 0, sizeof(cl_mem), &buffers.meshBuffer);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to set test kernel arg mesh buffer: " << err << std::endl;
+        std::cerr << "failed to set test kernel arg mesh buffer: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       cl_int meshCount = (cl_int)meshList.size();
       err = clSetKernelArg(testKernel, 1, sizeof(cl_int), &meshCount);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to set test kernel arg mesh count: " << err << std::endl;
+        std::cerr << "failed to set test kernel arg mesh count: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       err = clSetKernelArg(testKernel, 2, sizeof(cl_mem), &buffers.triangleBuffer);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to set test kernel arg triangle buffer: " << err << std::endl;
+        std::cerr << "failed to set test kernel arg triangle buffer: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       err = clSetKernelArg(testKernel, 3, sizeof(cl_mem), &buffers.nodeBuffer);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to set test kernel arg node buffer: " << err << std::endl;
+        std::cerr << "failed to set test kernel arg node buffer: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       err = clSetKernelArg(testKernel, 4, sizeof(CameraInformation), &camInfo);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to set test kernel arg camera information: " << err << std::endl;
+        std::cerr << "failed to set test kernel arg camera information: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       cl_float2 uv = {(float)mouseX / (float)WIDTH, (float)mouseY / (float)HEIGHT};
       err = clSetKernelArg(testKernel, 5, sizeof(cl_float2), &uv);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to set test kernel arg UV coordinates: " << err << std::endl;
+        std::cerr << "failed to set test kernel arg UV coordinates: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       cl_int outMeshIdx = -1;
       cl_mem outMeshIdxBuffer = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(cl_int), &outMeshIdx, &err);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to create output mesh index buffer: " << err << std::endl;
+        std::cerr << "failed to create output mesh index buffer: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       err = clSetKernelArg(testKernel, 6, sizeof(cl_mem), &outMeshIdxBuffer);
       if (err != CL_SUCCESS) {
-        std::cerr << "failed to set test kernel arg output mesh index buffer: " << err << std::endl;
+        std::cerr << "failed to set test kernel arg output mesh index buffer: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       size_t onePixel[2] = {1, 1};
       err = clEnqueueNDRangeKernel(queue, testKernel, 2, nullptr, onePixel, nullptr, 0, nullptr, nullptr);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to enqueue test kernel: " << err << std::endl;
+        std::cerr << "Failed to enqueue test kernel: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       err = clEnqueueReadBuffer(queue, outMeshIdxBuffer, CL_TRUE, 0, sizeof(cl_int), &outMeshIdx, 0, nullptr, nullptr);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to read output mesh index buffer: " << err << std::endl;
+        std::cerr << "Failed to read output mesh index buffer: " << getCLErrorString(err) << std::endl;
         return 1;
       }
       clReleaseMemObject(outMeshIdxBuffer);
@@ -391,7 +398,7 @@ int main() {
       // Make sure commands have been submitted to the device
       err = clFinish(queue);
       if (err != CL_SUCCESS) {
-        std::cerr << "Failed to finish command queue after test kernel: " << err << std::endl;
+        std::cerr << "Failed to finish command queue after test kernel: " << getCLErrorString(err) << std::endl;
         return 1;
       }
     }
@@ -458,33 +465,33 @@ int main() {
     // Update camera info arg
     err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
+      std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
     }
     err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
+      std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
     }
     err = clSetKernelArg(kernel, 9, sizeof(cl_int), &bounceCount);
     if (err != CL_SUCCESS) {
-      std::cerr << "failed to set kernel arg bounce count: " << err << std::endl;
+      std::cerr << "failed to set kernel arg bounce count: " << getCLErrorString(err) << std::endl;
       return 1;
     }
     err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
     if (err != CL_SUCCESS) {
-      std::cerr << "failed to set kernel arg rays per pixel: " << err << std::endl;
+      std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
       return 1;
     }
     // Enqueue kernel
     err = clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to enqueue kernel: " << err << std::endl;
+      std::cerr << "Failed to enqueue kernel: " << getCLErrorString(err) << std::endl;
       break;
     }
 
     // Make sure commands have been submitted to the device
     err = clFlush(queue);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to flush command queue: " << err << std::endl;
+      std::cerr << "Failed to flush command queue: " << getCLErrorString(err) << std::endl;
       break;
     }
 
@@ -495,7 +502,7 @@ int main() {
 
     err = clEnqueueReadBuffer(queue, buffers.imageBuffer, CL_TRUE, 0, bytesToRead, pixels.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to read buffer: " << err << std::endl;
+      std::cerr << "Failed to read buffer: " << getCLErrorString(err) << std::endl;
       break;
     }
     // ADD!!! buffers.imageBuffer to intCLBuffer
@@ -573,7 +580,7 @@ int main() {
 
     err = clFinish(queue);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to finish command queue: " << err << std::endl;
+      std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
       return 1;
     }
   }
@@ -582,22 +589,22 @@ int main() {
 #else
   err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
+    std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
+    std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   err = clSetKernelArg(kernel, 9, sizeof(cl_int), &bounceCount);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg bounce count: " << err << std::endl;
+    std::cerr << "failed to set kernel arg bounce count: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg rays per pixel: " << err << std::endl;
+    std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   if (VIDEO_FRAME_COUNT > 1) {
@@ -622,27 +629,32 @@ int main() {
 #endif
   err = releaseBuffers(buffers);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release buffers: " << err << std::endl;
+    std::cerr << "Failed to release buffers: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   err = clReleaseKernel(kernel);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release kernel: " << err << std::endl;
+    std::cerr << "Failed to release kernel: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   err = clReleaseProgram(program);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release program: " << err << std::endl;
+    std::cerr << "Failed to release program: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   err = clReleaseCommandQueue(queue);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release command queue: " << err << std::endl;
+    std::cerr << "Failed to release command queue: " << getCLErrorString(err) << std::endl;
     return 1;
   }
   err = clReleaseContext(ctx);
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release context: " << err << std::endl;
+    std::cerr << "Failed to release context: " << getCLErrorString(err) << std::endl;
+    return 1;
+  }
+  err = clReleaseDevice(device);
+  if (err != CL_SUCCESS && err != CL_INVALID_DEVICE) {
+    std::cerr << "Failed to release device: " << getCLErrorString(err) << std::endl;
     return 1;
   }
 #ifndef RENDER_AND_GET_OUT

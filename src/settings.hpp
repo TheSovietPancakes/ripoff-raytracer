@@ -44,7 +44,7 @@ unsigned int HEIGHT = 2160;
 // Update with caution.
 unsigned int TILE_SIZE = 1024;
 // The path, absolute or relative (to the cwd), to the .obj file to load.
-#define OBJECT_PATH "dragon.obj"
+#define OBJECT_PATH "knight.obj"
 // How much space there is inside the Cornell box between the model and the walls
 #define CORNELL_BREATHING_ROOM 100.0f
 // How many frames of video to render.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "clErrorCodes.hpp"
 #include "math.hpp"
 #include "readobj.hpp"
 #include "settings.hpp"
@@ -54,7 +55,7 @@ Buffers generateBuffers(std::vector<Triangle>& triangleList, std::vector<MeshInf
   }
   err = clSetKernelArg(kernel, 8, sizeof(cl_mem), &nodeBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg node buffer: " << err << std::endl;
+    std::cerr << "failed to set kernel arg node buffer: " << getCLErrorString(err) << std::endl;
     exit(1);
   }
 
@@ -62,34 +63,34 @@ Buffers generateBuffers(std::vector<Triangle>& triangleList, std::vector<MeshInf
   cl_int meshCount = (cl_int)meshList.size();
   err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &meshBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg mesh buffer: " << err << std::endl;
+    std::cerr << "failed to set kernel arg mesh buffer: " << getCLErrorString(err) << std::endl;
     exit(1);
   }
   err = clSetKernelArg(kernel, 1, sizeof(cl_mem), &triangleBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg triangle buffer: " << err << std::endl;
+    std::cerr << "failed to set kernel arg triangle buffer: " << getCLErrorString(err) << std::endl;
     exit(1);
   }
   err = clSetKernelArg(kernel, 2, sizeof(cl_int), &meshCount);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg mesh count: " << err << std::endl;
+    std::cerr << "failed to set kernel arg mesh count: " << getCLErrorString(err) << std::endl;
     exit(1);
   }
   err = clSetKernelArg(kernel, 3, sizeof(cl_mem), &imageBuffer);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg image buffer: " << err << std::endl;
+    std::cerr << "failed to set kernel arg image buffer: " << getCLErrorString(err) << std::endl;
     exit(1);
   }
   const cl_int width = WIDTH; // you must pass a pointer into clSetKernelArg, meaning you have to pass an lvalue
   const cl_int height = HEIGHT;
   err = clSetKernelArg(kernel, 4, sizeof(cl_int), &width);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg image width: " << err << std::endl;
+    std::cerr << "failed to set kernel arg image width: " << getCLErrorString(err) << std::endl;
     exit(1);
   }
   err = clSetKernelArg(kernel, 5, sizeof(cl_int), &height);
   if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg image height: " << err << std::endl;
+    std::cerr << "failed to set kernel arg image height: " << getCLErrorString(err) << std::endl;
     exit(1);
   }
 
@@ -108,27 +109,23 @@ cl_int tryFreeMemoryObject(cl_mem& memobj) {
 cl_int releaseBuffers(Buffers& buffers) {
   cl_int err = CL_SUCCESS;
   err = tryFreeMemoryObject(buffers.triangleBuffer);
-  buffers.triangleBuffer = nullptr;
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release triangle buffer\n";
+    std::cerr << "Failed to release triangle buffer: " << getCLErrorString(err) << "\n";
     return err;
   }
   err = tryFreeMemoryObject(buffers.meshBuffer);
-  buffers.meshBuffer = nullptr;
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release mesh buffer\n";
+    std::cerr << "Failed to release mesh buffer: " << getCLErrorString(err) << "\n";
     return err;
   }
   err = tryFreeMemoryObject(buffers.imageBuffer);
-  buffers.imageBuffer = nullptr;
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release image buffer\n";
+    std::cerr << "Failed to release image buffer: " << getCLErrorString(err) << "\n";
     return err;
   }
   err = tryFreeMemoryObject(buffers.nodeBuffer);
-  buffers.nodeBuffer = nullptr;
   if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release node buffer\n";
+    std::cerr << "Failed to release node buffer: " << getCLErrorString(err) << "\n";
     return err;
   }
   return err;
@@ -186,31 +183,31 @@ void accumulateAndRenderFrame(std::vector<unsigned char>& pixels, cl_uint& numFr
         std::cout << std::flush;
         err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg camera information: " << err << std::endl;
+          std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
           exit(1);
         }
         size_t pRNGseed = ((numFrames << 3) * (totalTiles << 1) + (tileIndex << 4) * 0x857379583) * (seed << 8); // A bunch of random nonsense to it
         err = clSetKernelArg(kernel, 7, sizeof(cl_int), &pRNGseed);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg num frames: " << err << std::endl;
+          std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
           exit(1);
         }
         err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to enqueue kernel: " << err << std::endl;
+          std::cerr << "Failed to enqueue kernel: " << getCLErrorString(err) << std::endl;
           exit(1);
         }
         tileIndex++;
         err = clFinish(queue); // safer than flush when reading back
         if (err != CL_SUCCESS) {
-          std::cerr << "Failed to finish command queue: " << err << std::endl;
+          std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
           exit(1);
         }
       }
     }
     err = clEnqueueReadBuffer(queue, buffers.imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
-      std::cerr << "Failed to read buffer: " << err << std::endl;
+      std::cerr << "Failed to read buffer: " << getCLErrorString(err) << std::endl;
       exit(1);
     }
 
