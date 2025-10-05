@@ -59,11 +59,11 @@ int main() {
   std::cin >> RAYS_PER_PIXEL;
   std::cout << "Please enter the maximum number of bounces per ray. Higher = better quality, but slower, with diminishing returns. 50+ is a good trade-off.\n> " << std::flush;
   std::cin >> MAX_BOUNCE_COUNT;
-  std::cout << "Please enter a tile size. 512-4096 is a good trade-off. Powers of 2 are preferred.\n"
-            << "Higher = less stable on some GPUs, with more infrequent progress updates.\n"
-            << "Higher values are also more likely to freeze or hang, as there is a larger workload at once.\n"
-            << "> " << std::flush;
-  std::cin >> TILE_SIZE;
+  // std::cout << "Please enter a tile size. 512-4096 is a good trade-off. Powers of 2 are preferred.\n"
+  //           << "Higher = less stable on some GPUs, with more infrequent progress updates.\n"
+  //           << "Higher values are also more likely to freeze or hang, as there is a larger workload at once.\n"
+  //           << "> " << std::flush;
+  // std::cin >> TILE_SIZE;
   if (TILE_SIZE > WIDTH && TILE_SIZE > HEIGHT) {
     TILE_SIZE = std::min(WIDTH, HEIGHT);
     std::cout << "Invalid tile size, using " << TILE_SIZE << " instead.\n";

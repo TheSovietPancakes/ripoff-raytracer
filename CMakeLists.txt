@@ -10,9 +10,20 @@ if(NOT OpenCL_FOUND)
   # if windows
   message(STATUS "OpenCL not found via find_package, attempting manual search...")
   if(WIN32)
+    # Test the path env:SystemRoot\System32\OpenCL.dll
+    # (Which simplifies to C:/Windows/System32/OpenCL.dll)
+    if(EXISTS "$ENV{SystemRoot}/System32/OpenCL.dll")
+      message(STATUS "Found OpenCL.dll in $ENV{SystemRoot}/System32")
+      set(OpenCL_LIBRARY "$ENV{SystemRoot}/System32/OpenCL.dll")
+
+      set(OpenCL_INCLUDE_DIR "C:/Program Files/OpenCL-SDK/include") # Include is different; It gets compiled into the exe. THe DLL is dynamic.
+      set(OpenCL_LIBRARIES ${OpenCL_LIBRARY})
+      set(OpenCL_INCLUDE_DIRS ${OpenCL_INCLUDE_DIR})
+    endif()
+
     # Try to find common OpenCL.dll locations
     # C:/Program Files/OpenCL-SDK/<...>/
-    if(NOT EXISTS "C:/Program Files/OpenCL-SDK")
+    if(NOT EXISTS "C:/Program Files/OpenCL-SDK" AND NOT OpenCL_FOUND)
       message(FATAL_ERROR "OpenCL SDK not found in C:/Program Files/OpenCL-SDK. Please install OpenCL SDK.")
     endif()
 
@@ -77,6 +88,7 @@ add_executable(${PROJECT_NAME} src/main.cpp)
 # Include OpenCL
 include_directories(${OpenCL_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} ${OpenCL_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} -static) # Most normal people don't have C++ libraries pre-installed on their computer. Who knew!
 
 # # ImGui sources
 # set(IMGUI_SOURCES external/imgui/imgui.cpp
