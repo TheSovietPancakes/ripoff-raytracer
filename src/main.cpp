@@ -1,5 +1,4 @@
 #include "image.hpp"
-#include "settings.hpp"
 
 #ifndef RENDER_AND_GET_OUT
 #include <GLFW/glfw3.h>
@@ -12,10 +11,6 @@
 bool windowIsFocused = true;
 
 int main() {
-  if (!std::filesystem::exists(OBJECT_PATH)) {
-    std::cerr << "OBJ file does not exist: " << OBJECT_PATH << std::endl;
-    return 1;
-  }
   cl_int err;
 #ifndef RENDER_AND_GET_OUT
   err = glfwInit();
@@ -135,20 +130,41 @@ int main() {
     std::cout << "-----------------------------------\n";
   }
 #endif
-  
-  std::cout << "Please enter a width, in pixels. For example, 1920, 3840, ...\n> " << std::flush;
-  std::cin >> WIDTH;
-  std::cout << "Please enter a height, in pixels. For example, 1080, 2160, ...\n> " << std::flush;
-  std::cin >> HEIGHT;
-  std::cout << "Please enter how many rays per pixel to shoot. Higher = better quality, but slower. 100-500 is a good trade-off.\n> " << std::flush;
-  std::cin >> RAYS_PER_PIXEL;
-  std::cout << "Please enter the maximum number of bounces per ray. Higher = better quality, but slower, with diminishing returns. 50+ is a good trade-off.\n> " << std::flush;
-  std::cin >> MAX_BOUNCE_COUNT;
+
+  std::cout << "Please enter a width, in pixels. For example, 1920, 3840, ...\n(" << WIDTH << ") > " << std::flush;
+  if (!parseDefaultInput(std::cin, &WIDTH, true)) {
+    std::cerr << "Invalid input for width. Please enter a numeric value.\nExiting..." << std::endl;
+    return 1;
+  }
+
+  std::cout << "Please enter a height, in pixels. For example, 1080, 2160, ...\n(" << HEIGHT << ") > " << std::flush;
+  if (!parseDefaultInput(std::cin, &HEIGHT, true)) {
+    std::cerr << "Invalid input for height. Please enter a numeric value.\nExiting..." << std::endl;
+    return 1;
+  }
+
+  std::cout << "Please enter how many rays per pixel to shoot. Higher = better quality,"
+               "but slower. 100-500 is a bare minimum.\n(" << RAYS_PER_PIXEL << ") > " << std::flush;
+  if (!parseDefaultInput(std::cin, &RAYS_PER_PIXEL, true)) {
+    std::cerr << "Invalid input for rays per pixel. Please enter a numeric value.\nExiting..." << std::endl;
+    return 1;
+  }
+  std::cout << "Please enter the maximum number of bounces per ray. Higher = better quality,"
+               "but slower, with diminishing returns. 50+ is a good trade-off.\n(" << MAX_BOUNCE_COUNT << ") > " << std::flush;
+  if (!parseDefaultInput(std::cin, &MAX_BOUNCE_COUNT, true)) {
+    std::cerr << "Invalid input for max bounce count. Please enter a numeric value.\nExiting..." << std::endl;
+    return 1;
+  }
   // std::cout << "Please enter a tile size. 512-4096 is a good trade-off. Powers of 2 are preferred.\n"
   //           << "Higher = less stable on some GPUs, with more infrequent progress updates.\n"
   //           << "Higher values are also more likely to freeze or hang, as there is a larger workload at once.\n"
   //           << "> " << std::flush;
   // std::cin >> TILE_SIZE;
+  std::cout << "Please enter path (rel. or abs.) to the .obj file to load.\n(" << OBJECT_PATH << ")> " << std::flush;
+  while (!parseDefaultInput(std::cin, &OBJECT_PATH, false)) {
+    std::cerr << "Invalid input for object path. Please enter a valid path to a .obj file." << std::endl;
+  }
+
   if (TILE_SIZE > WIDTH && TILE_SIZE > HEIGHT) {
     TILE_SIZE = std::min(WIDTH, HEIGHT);
     std::cout << "Invalid tile size, using " << TILE_SIZE << " instead.\n";
@@ -188,21 +204,29 @@ int main() {
     return 1;
   }
   MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
+  // mesh.material = {
+  //     .type = MaterialType_Glassy,
+  //     .ior = 1.8f,
+  //     .color = {0.8, 0.8, 0.8},
+  //     .emissionColor = {1.0f, 1.0f, 1.0f},
+  //     .emissionStrength = 0.0f,
+  //     .reflectiveness = 0.0f,
+  //     .specularProbability = 1.0f,
+  // };
   mesh.material = {
       .type = MaterialType_Solid,
-      .color = {0.8, 0.8, 0.8},
-      .emissionColor = {1.0f, 1.0f, 1.0f},
+      .ior = 1.0f,
+      .color = {1.0f, 1.0f, 1.0f},
+      .emissionColor = {0.0f, 0.0f, 0.0f},
       .emissionStrength = 0.0f,
-      .reflectiveness = 0.7f,
+      .reflectiveness = 0.0f,
       .specularProbability = 1.0f,
   };
-  mesh.yaw = 1.5f;
-  // KNIGHT
-  mesh.scale = 0.5f;
-  // DRAGON
-  // mesh.pos.s[1] += 60.0f;
+  // dragon:
+  mesh.scale = 0.65f;
   // mesh.scale = 200.0f;
   // CAMERA_START_Y -= 60.0f;
+  // mesh.pos.s[1] += 60.0f;
 
   addCornellBoxToScene(mesh);
 

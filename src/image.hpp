@@ -267,7 +267,7 @@ void setupNextVideoFrame(CameraInformation& camInfo, int frameIndex) {
   const float anglePerFrame = (3.14159265359f * 2.0f) / (float)VIDEO_FRAME_COUNT;
   const float currentRotation = anglePerFrame * (float)frameIndex;
   MeshInfo& mesh = meshList.back();
-  mesh.yaw = currentRotation + 1.5f; // Add 1.5f so if only rendering 1 frame, it starts out cool
+  mesh.yaw = currentRotation + 5.5f; // Add 1.5f so if only rendering 1 frame, it starts out cool
 
   // HSV hsv = {
   //   .h = lerp(0, 360, (float)frameIndex / (float)VIDEO_FRAME_COUNT),
@@ -291,31 +291,34 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
   addQuad(cl_float3{minX, minY, minZ}, cl_float3{maxX, minY, minZ}, cl_float3{maxX, minY, maxZ}, cl_float3{minX, minY, maxZ}, cl_float3{0, 1, 0},
           cl_float3{0.0f, 0.8f, 0.0f});
   meshList.back().material = {
-      .type = MaterialType_Checker,
+      // .type = MaterialType_Checker,
       // .color = {0.05, 0.22, 0.05},
       // .emissionColor = {0.075, 0.4, 0.075},
-      .color = {0.07, 0.07, 0.07},
-      .emissionColor = {0.1, 0.1, 0.1},
-      .emissionStrength = 40.0f,
-      .reflectiveness = 0.7f,
+      // .emissionStrength = 40.0f,
+      .type = MaterialType_Solid,
+      .color = {0.7, 0.7, 0.7},
+      .emissionColor = {0.0f, 0.0f, 0.0f},
+      .emissionStrength = 0.0f,
+      .reflectiveness = 0.0f,
       .specularProbability = 1.0f,
   };
 
   // Ceiling (Y = maxY)
   addQuad({minX, maxY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, {0, -1, 0}, {1, 1, 1});
 
-  // Back wall (Z = maxZ)
-  addQuad({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, {0, 0, -1}, {1, 1, 1});
+  // Front wall (Z = maxZ)
+  addQuad({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, {0, 0, -1}, {1.0f, 1.0f, 1.0f});
+  meshList.back().material.type = MaterialType_OneSided; // invisible wall from back
 
-  // Front wall (Z = minZ)
-  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {1, 1, 1});
+  // Back wall (Z = minZ)
+  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {0.1f, 0.1f, 0.1f});
   // meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
 
-  // Left wall (X = minX)
-  addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.4});
+  // Left wall (X = minX) Blue
+  addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.8f});
 
-  // Right wall (X = maxX)
-  addQuad({maxX, minY, minZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {-1, 0, 0}, {0.4f, 0.2f, 0.2f});
+  // Right wall (X = maxX) Red
+  addQuad({maxX, minY, minZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {-1, 0, 0}, {0.8f, 0.2f, 0.2f});
 
   // Light quad on ceiling
   float lx = 50, lz = 50, ly = maxY - 1; // just below ceiling
@@ -323,7 +326,7 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
   meshList.back().material = {.type = MaterialType_Solid,
                               .color = {1, 1, 1},
                               .emissionColor = {1.0f, 1.0f, 1.0f},
-                              .emissionStrength = 5.0f,
+                              .emissionStrength = 8.0f,
                               .reflectiveness = 0.0f,
                               .specularProbability = 1};
 }

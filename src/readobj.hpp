@@ -10,8 +10,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include <functional>
 #include "math.hpp"
+#include <functional>
 
 typedef struct {
   float3 min = {CL_FLT_MAX, CL_FLT_MAX, CL_FLT_MAX};
@@ -38,10 +38,17 @@ typedef struct {
   float aspectRatio;
 } CameraInformation;
 
-typedef enum { MaterialType_Solid = 0, MaterialType_Checker = 1, MaterialType_Invisible = 2 } MaterialType;
+typedef enum {
+  MaterialType_Solid = 0,
+  MaterialType_Checker = 1,
+  MaterialType_Invisible = 2,
+  MaterialType_Glassy = 3, // TODO
+  MaterialType_OneSided = 4,
+} MaterialType;
 
 typedef struct {
   MaterialType type;
+  float ior = 1.0f;
   float3 color;
   float3 emissionColor;
   float emissionStrength;
@@ -389,10 +396,10 @@ void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color
                        .material = {
                            .type = MaterialType_Solid,
                            //  .color = {0, 0, 0},
-                            .color = color,
+                           .color = color,
                            .emissionColor = {0, 0, 0},
                            .emissionStrength = 0.0f,
-                           .reflectiveness = 1.0f,
+                           .reflectiveness = 0.0f,
                            .specularProbability = 1.0f,
                        }};
 

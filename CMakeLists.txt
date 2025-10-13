@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 
 set(OpenGL_GL_PREFERENCE GLVND)
+set(CMAKE_CXX_COMPILER gcc)
+set(CMAKE_C_COMPILER gcc)
 
 project(gputest)
 
@@ -22,12 +24,9 @@ if(NOT OpenCL_FOUND)
       set(OpenCL_INCLUDE_DIRS "")
     endif()
 
-    # Try to find common OpenCL.dll locations
-    # C:/Program Files/OpenCL-SDK/<...>/
-    if(NOT EXISTS "C:/Program Files/OpenCL-SDK" AND NOT OpenCL_FOUND)
-      message(FATAL_ERROR "OpenCL SDK not found in C:/Program Files/OpenCL-SDK. Please install OpenCL SDK.")
-    endif()
+    # Try to find common OpenCL.dll locations;
 
+    # C:/Program Files/OpenCL-SDK/<...>/
     if(NOT OpenCL_INCLUDE_FOUND OR NOT OpenCL_FOUND)
       if(EXISTS "C:/Program Files/OpenCL-SDK/include/CL/cl.h")
         if (NOT OpenCL_INCLUDE_FOUND)
@@ -44,6 +43,7 @@ if(NOT OpenCL_FOUND)
         endif()
       endif()
     endif()
+    
     # Go through each directory of OpenCL-SDK
     # On my system, there was a nested folder, so maybe
     # it's like this for you, too.
@@ -106,7 +106,11 @@ add_executable(${PROJECT_NAME} src/main.cpp)
 # Include OpenCL
 include_directories(${OpenCL_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} ${OpenCL_LIBRARIES})
-target_link_libraries(${PROJECT_NAME} -static) # Most normal people don't have C++ libraries pre-installed on their computer. Who knew!
+if (WIN32)
+  # Most people who use Windows aren't nerds, therefore do not have C++ libraries installed
+  # So we will statically link the C++ runtime to avoid dependency on them (because on windows, they are actually static)
+  target_link_libraries(${PROJECT_NAME} -static)
+endif()
 
 # # ImGui sources
 # set(IMGUI_SOURCES external/imgui/imgui.cpp

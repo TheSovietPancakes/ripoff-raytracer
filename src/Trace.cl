@@ -4,6 +4,7 @@
 // Math
 #define tau 6.28318530717958647692f // 2pi
 #define EPSILON 1e-6f               // Tiny number for finding precision errors
+#define iorAir 1.0f
 
 typedef struct {
   float3 min;
@@ -27,11 +28,15 @@ typedef struct {
 typedef enum {
   MaterialType_Solid = 0,
   MaterialType_Checker = 1,
-  MaterialType_Invisible = 2
+  MaterialType_Invisible = 2,
+  MaterialType_Glassy = 3,
+  MaterialType_OneSided = 4,
 } MaterialType;
 
 typedef struct {
   MaterialType type;
+  float ior; // Index of Refraction; "How fast does light travel though me,
+             // versus through air?""
   float3 color;
   float3 emissionColor;
   float emissionStrength;
@@ -64,6 +69,7 @@ typedef struct {
   float dst;
   float3 hitPoint;
   float3 normal;
+  bool isBackface;
   RayTracingMaterial material;
 } HitInfo;
 
@@ -210,9 +216,23 @@ inline float rand01(__private uint *state) {
   return SafelyMapU32ToFloat(z);
 }
 
-// cheap cosine weighted hemisphere sampling
-float3 reflect(float3 dirIn, float3 normal) {
-  return dirIn - 2.0f * dot(dirIn, normal) * normal;
+float3 refract(float3 inDir, float3 normal, float iorA, float iorB) {
+  float refractRatio = iorA / iorB;
+  float cosAngleIn = -dot(inDir, normal);
+  float sinSqrAngleOfRefraction =
+      refractRatio * refractRatio * (1 - cosAngleIn * cosAngleIn);
+  if (sinSqrAngleOfRefraction > 1)
+    return 0; // was not refracted (total internal reflection, aka it just
+              // reflected lmao)
+
+  float3 refractDir =
+      refractRatio * inDir +
+      (refractRatio * cosAngleIn - sqrt(1 - sinSqrAngleOfRefraction)) * normal;
+  return refractDir;
+}
+
+float3 reflect(float3 inDir, float3 normal) {
+  return inDir - 2 * dot(inDir, normal) * normal;
 }
 
 float3 SampleHemisphereCosine(float3 n, __private uint *state) {
@@ -236,7 +256,24 @@ float3 SampleHemisphereCosine(float3 n, __private uint *state) {
   return fast_normalize(t * x + b * y + n * z);
 }
 
-inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
+bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax,
+                    __private float *outDist) {
+  // Pitch, yaw, roll, and scale are handled outside this function
+  // Do a normal cube AABB test
+  // float3 invDir = 1.0f / ray.direction;
+  float3 invDir = ray.invDir;
+  float3 t0s = (boundsMin - ray.origin) * invDir;
+  float3 t1s = (boundsMax - ray.origin) * invDir;
+  float3 tsmaller = fmin(t0s, t1s);
+  float3 tbigger = fmax(t0s, t1s);
+  float tmin = fmax(fmax(tsmaller.x, tsmaller.y), tsmaller.z);
+  float tmax = fmin(fmin(tbigger.x, tbigger.y), tbigger.z);
+  if (outDist)
+    *outDist = tmin;
+  return tmax >= fmax(tmin, 0.0f);
+}
+
+inline HitInfo RayTriangle(Ray ray, const Triangle tri, bool cullBackface) {
   float3 edge1 = tri.posB - tri.posA;
   float3 edge2 = tri.posC - tri.posA;
 
@@ -264,34 +301,23 @@ inline HitInfo RayTriangle(Ray ray, const Triangle tri) {
   float3 n = fast_normalize(tri.normalA * (1.0f - u - v) + tri.normalB * u +
                             tri.normalC * v);
 
-  if (dot(ray.direction, n) > 0.0f)
-    return (HitInfo){.didHit = false};
-
+  bool didHitBack = false;
+  if (dot(ray.direction, n) > EPSILON) {
+    if (cullBackface)
+      return (HitInfo){.didHit = false}; // ignore backface hits
+    // ray is inside (it hit the backface)
+    didHitBack = true;
+    n = -n; // flip normal to always point against the ray
+  }
   return (HitInfo){.didHit = true,
                    .dst = t,
                    .hitPoint = ray.origin + ray.direction * t,
-                   .normal = n};
-}
-
-bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax,
-                    __private float *outDist) {
-  // Pitch, yaw, roll, and scale are handled outside this function
-  // Do a normal cube AABB test
-  // float3 invDir = 1.0f / ray.direction;
-  float3 invDir = ray.invDir;
-  float3 t0s = (boundsMin - ray.origin) * invDir;
-  float3 t1s = (boundsMax - ray.origin) * invDir;
-  float3 tsmaller = fmin(t0s, t1s);
-  float3 tbigger = fmax(t0s, t1s);
-  float tmin = fmax(fmax(tsmaller.x, tsmaller.y), tsmaller.z);
-  float tmax = fmin(fmin(tbigger.x, tbigger.y), tbigger.z);
-  if (outDist)
-    *outDist = tmin;
-  return tmax >= fmax(tmin, 0.0f);
+                   .normal = n,
+                   .isBackface = didHitBack};
 }
 
 HitInfo RayTriangleBVH(int nodeIdx, Ray ray, __global const Node *nodeList,
-                       __global const Triangle *triangles) {
+                       __global const Triangle *triangles, bool cullBackface) {
   HitInfo closestHit;
   closestHit.didHit = false;
   closestHit.dst = INFINITY;
@@ -325,7 +351,7 @@ private
     if (node.numTriangles > 0) { // "if (isLeafNode)"
       for (ulong i = 0; i < node.numTriangles; ++i) {
         ulong triIdx = node.index + i;
-        HitInfo hit = RayTriangle(ray, triangles[triIdx]);
+        HitInfo hit = RayTriangle(ray, triangles[triIdx], cullBackface);
         if (hit.didHit && hit.dst < closestHit.dst) {
           closestHit = hit;
         }
@@ -370,6 +396,40 @@ private
   return closestHit;
 }
 
+// reflectance value is 1 - this value
+// thanks sebastian lague <3
+float CalculateReflectance(float3 inDir, float3 normal, float iorA,
+                           float iorB) {
+  float refractRatio = iorA / iorB;
+  float cosAngleIn = -dot(inDir, normal);
+  if (cosAngleIn <= 0) return 1;
+  float sinSqrAngleOfRefraction =
+      refractRatio * refractRatio * (1 - cosAngleIn * cosAngleIn);
+  if (sinSqrAngleOfRefraction >= 1)
+    return 1; // was not refracted (total internal reflection, aka it just
+              // reflected lmao)
+
+  float cosAngleOfRefraction = sqrt(1 - sinSqrAngleOfRefraction);
+  float denominatorPerpendicular =
+      iorA * cosAngleIn + iorB * cosAngleOfRefraction;
+  float denominatorParallel = iorA * cosAngleIn + iorB * cosAngleOfRefraction;
+
+  if (min(denominatorPerpendicular, denominatorParallel) < EPSILON)
+    return 1;
+
+  // Perpendicular polarization
+  float rPerpendicular = (iorA * cosAngleIn - iorB * cosAngleOfRefraction) /
+                         denominatorPerpendicular;
+  rPerpendicular *= rPerpendicular;
+  // Parallel polarization
+  float rParallel =
+      (iorB * cosAngleIn - iorA * cosAngleOfRefraction) / denominatorParallel;
+  rParallel *= rParallel;
+
+  // Return the average of the perpendicular and parallel polarizations
+  return (rPerpendicular + rParallel) / 2;
+}
+
 HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
                                           __global const MeshInfo *meshes,
                                           int meshCount,
@@ -396,10 +456,18 @@ HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
     Ray localRay = WorldToLocalRay(worldRay, Rinv, info.pos, info.scale);
 
     // Perform intersection test in local space
+    bool cullBackface = (info.material.type != MaterialType_Glassy &&
+                         info.material.type != MaterialType_Invisible &&
+                         info.material.type != MaterialType_OneSided);
     HitInfo localHit =
-        RayTriangleBVH(info.nodeIdx, localRay, nodeList, triangles);
+        RayTriangleBVH(info.nodeIdx, localRay, nodeList, triangles, cullBackface);
 
     if (localHit.didHit) {
+      // Check if the ray hit the backface of a one-sided material
+      if (info.material.type == MaterialType_OneSided && localHit.isBackface) {
+        // Skip this hit; effectively, we never hit this triangle.
+        continue;
+      }
       // Transform hit back to world space
       HitInfo worldHit =
           LocalToWorldHit(localHit, R, info.pos, info.scale, worldRay);
@@ -420,7 +488,8 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
              __global const Node *nodeList, uint maxBounceCount) {
   float3 incomingLight = (float3)(0.0f, 0.0f, 0.0f);
   float3 throughput = (float3)(1.0f, 1.0f, 1.0f);
-  for (uint bounce = 0; bounce < maxBounceCount; ++bounce) {
+  uint bounceCount = 0;
+  while (bounceCount < maxBounceCount) {
     HitInfo hit = CalculateRayCollisionWithTriangle(ray, meshes, meshCount,
                                                     triangles, nodeList);
 
@@ -430,10 +499,12 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
       break;
     }
     if (hit.material.type == MaterialType_Invisible) {
-      // skip this hit, continue ray
+      // Skip the hit; just go forward again
       ray.origin = hit.hitPoint + ray.direction * EPSILON;
       continue;
     }
+    // One-sided will be checked in the CalculateRayCollisionWithTriangle
+    // function. This way, we can continue the ray's path without any artifacts.
     if (hit.material.type == MaterialType_Checker) {
       float checkerSize =
           hit.material.emissionStrength; // size of each checker square
@@ -450,12 +521,45 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
       hit.material.color = checkerColor;
       hit.material.emissionStrength = 0.0f; // no emission for checker
     }
+    if (hit.material.type == MaterialType_Glassy) {
+      float iorCurrent = hit.isBackface ? hit.material.ior : iorAir;
+      float iorNext = hit.isBackface ? iorAir : hit.material.ior;
 
-    float3 diffuseDirection = SampleHemisphereCosine(hit.normal, rngState);
-    float3 specularDirection = reflect(ray.direction, hit.normal);
-    ray.direction =
-        lerp3(diffuseDirection, specularDirection, hit.material.reflectiveness);
-    ray.invDir = 1.0f / ray.direction;
+      // Calculate reflection and refraction directions
+      float3 reflectDir = reflect(ray.direction, hit.normal);
+      float3 refractDir =
+          refract(ray.direction, hit.normal, iorCurrent, iorNext);
+
+      // Calculate the proportion of light [0, 1] that takes each path
+      float reflectWeight =
+          CalculateReflectance(ray.direction, hit.normal, iorCurrent, iorNext);
+      float refractWeight = 1.0f - reflectWeight;
+
+      // Randomly choose between reflection and refraction based on weights
+      bool willReflect = rand01(rngState) < reflectWeight;
+
+      // Update ray direction and origin
+      ray.direction = willReflect ? reflectDir : refractDir;
+      ray.origin = hit.hitPoint + EPSILON * hit.normal * sign(dot(hit.normal, ray.direction));
+
+      // Adjust throughput to account for reflectance and transmittance
+      throughput *= willReflect ? reflectWeight : refractWeight;
+    }
+    if (hit.material.type == MaterialType_Solid) {
+      bool isSpecularBounce =
+          hit.material.specularProbability >= RandomValue(rngState);
+
+      ray.origin = hit.hitPoint + (hit.normal * EPSILON);
+      float3 diffuseDir = normalize(hit.normal + RandomDirection(rngState));
+      float3 specularDir = reflect(ray.direction, hit.normal);
+      ray.direction =
+          normalize(lerp3(diffuseDir, specularDir,
+                          hit.material.reflectiveness * isSpecularBounce));
+
+      // Update light info
+      float3 emittedLight =
+          hit.material.emissionColor * hit.material.emissionStrength;
+    }
 
     // accumulate emission
     incomingLight += throughput * (hit.material.emissionColor *
@@ -468,12 +572,13 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
     throughput *= hit.material.color;
     // Russian roulette (optional) - simple energy termination to save work
     float p = fmax(throughput.x, fmax(throughput.y, throughput.z));
-    if (bounce > 3) {
+    if (bounceCount > 3) {
       float q = fmax(0.05f, 1.0f - p);
       if (rand01(rngState) < q)
         break;
       throughput /= (1.0f - q);
     }
+    bounceCount++;
   }
   return incomingLight;
 }
@@ -565,7 +670,8 @@ __kernel void checkIntersectingRay(__global const MeshInfo *meshList,
 
     // Perform intersection test in local space
     HitInfo localHit =
-        RayTriangleBVH(info.nodeIdx, localRay, nodeList, triangleList);
+        RayTriangleBVH(info.nodeIdx, localRay, nodeList, triangleList,
+                       (info.material.type == MaterialType_OneSided));
     if (localHit.didHit) {
       // Transform hit back to world space
       HitInfo worldHit =

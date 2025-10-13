@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 // VISITORS BEWARE:
 // This program is super inefficient. Don't trust it as a reference for anything.
@@ -30,21 +31,23 @@ float CAMERA_START_ROLL = 0.0f;
 #define FRAME_TOTAL 1
 // Functionally equivalent to FRAME_TOTAL, as it averages together pixel color results
 // however, the averaging happens on the GPU, and images are brighter and quicker.
-unsigned int RAYS_PER_PIXEL = 300;
+unsigned int RAYS_PER_PIXEL = 50;
 unsigned int MAX_BOUNCE_COUNT = 50; // Self-explanatory
 // The resolution of the output image and size of the window, if a window is created.
-unsigned int WIDTH = 3840;
-unsigned int HEIGHT = 2160;
+// unsigned int WIDTH = 3840;
+// unsigned int HEIGHT = 2160;
 // These are the dimensions of an iPhone 16, the phone that I have lol
 // unsigned int WIDTH = 1179;
 // unsigned int HEIGHT = 2556;
+unsigned int WIDTH = 500;
+unsigned int HEIGHT = 500;
 // Each frame is split into tiles so that the GPU has a change to refresh
 // the screen and avoid crashing. However, if your GPU is powerful enough,
 // a potential bottleneck could occur in data transfer between CPU/GPU.
 // Update with caution.
-unsigned int TILE_SIZE = 1024;
+unsigned int TILE_SIZE = 128;
 // The path, absolute or relative (to the cwd), to the .obj file to load.
-#define OBJECT_PATH "knight.obj"
+std::string OBJECT_PATH = "knight.obj";
 // How much space there is inside the Cornell box between the model and the walls
 #define CORNELL_BREATHING_ROOM 100.0f
 // How many frames of video to render.

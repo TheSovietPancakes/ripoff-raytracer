@@ -108,6 +108,7 @@ float3 operator/=(float3& a, const float b) {
   return a;
 }
 float3 operator-(const float3& a, const float3& b) { return {a.s[0] - b.s[0], a.s[1] - b.s[1], a.s[2] - b.s[2]}; }
+float3 operator-(const float3& a) { return {-a.s[0], -a.s[1], -a.s[2]}; }
 float3 operator*(const float3& a, const float b) { return {a.s[0] * b, a.s[1] * b, a.s[2] * b}; }
 float3 operator/(const float3& a, const float b) { return {a.s[0] / b, a.s[1] / b, a.s[2] / b}; }
 
@@ -175,4 +176,38 @@ float3 normalize(float3 a, float3 b, float3 c) {
     return n / len;
   }
   return {0.0f, 0.0f, 0.0f};
+}
+
+#include <iostream>
+template<typename T>
+bool parseDefaultInput(std::istream& in, T* out, bool isNumeric) {
+  std::string line;
+  std::getline(in, line);
+  if (line.empty())
+    return true; // use default
+  // try parsing
+  if (isNumeric) {
+    try {
+      if (typeid(out) == typeid(unsigned int*)) {
+        unsigned int val = std::stoul(line);
+        *(unsigned int*)out = val;
+      } else if (typeid(out) == typeid(int*)) {
+        int val = std::stoi(line);
+        *(int*)out = val;
+      } else if (typeid(out) == typeid(float*)) {
+        float val = std::stof(line);
+        *(float*)out = val;
+      } else {
+        return false; // unsupported type
+      }
+      return true;
+    } catch (...) {
+      return false; // parsing error
+    }
+  } else {
+    *(std::string*)out = line;
+    return true;
+  }
+
+  return false; // you can't reach here lol
 }
