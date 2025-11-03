@@ -1,0 +1,143 @@
+cmake_minimum_required(VERSION 3.10)
+
+set(OpenGL_GL_PREFERENCE GLVND)
+set(CMAKE_CXX_COMPILER gcc)
+set(CMAKE_C_COMPILER gcc)
+
+project(gputest)
+
+# Find OpenCL from cmake/FindOpenCL.cmake
+find_package(OpenCL)
+if(NOT OpenCL_FOUND)
+  # if windows
+  message(STATUS "OpenCL not found via find_package, attempting manual search...")
+  if(WIN32)
+    set(OpenCL_INCLUDE_FOUND false) # If we did not find it with find_package, we probably didn't find the includes either
+    # Test the path env:SystemRoot\System32\OpenCL.dll
+    # (Which simplifies to C:/Windows/System32/OpenCL.dll)
+    if(EXISTS "$ENV{SystemRoot}/System32/OpenCL.dll")
+      message(STATUS "Found OpenCL.dll in $ENV{SystemRoot}/System32")
+      set(OpenCL_LIBRARY "$ENV{SystemRoot}/System32/OpenCL.dll")
+      set(OpenCL_FOUND TRUE)
+      set(OpenCL_INCLUDE_FOUND FALSE)
+      set(OpenCL_LIBRARIES ${OpenCL_LIBRARY})
+      set(OpenCL_INCLUDE_DIRS "")
+    endif()
+
+    # Try to find common OpenCL.dll locations;
+
+    # C:/Program Files/OpenCL-SDK/<...>/
+    if(NOT OpenCL_INCLUDE_FOUND OR NOT OpenCL_FOUND)
+      if(EXISTS "C:/Program Files/OpenCL-SDK/include/CL/cl.h")
+        if (NOT OpenCL_INCLUDE_FOUND)
+          message(STATUS "Found OpenCL headers in C:/Program Files/OpenCL-SDK/include")
+          set(OpenCL_INCLUDE_FOUND TRUE)
+          set(OpenCL_INCLUDE_DIRS "C:/Program Files/OpenCL-SDK/include")
+        endif()
+          
+        if (NOT OpenCL_FOUND)
+          message(STATUS "Found OpenCL library in C:/Program Files/OpenCL-SDK/lib")
+          set(OpenCL_FOUND TRUE)
+          set(OpenCL_LIBRARY "C:/Program Files/OpenCL-SDK/lib/OpenCL.lib")
+          set(OpenCL_LIBRARIES ${OpenCL_LIBRARY})
+        endif()
+      endif()
+    endif()
+    
+    # Go through each directory of OpenCL-SDK
+    # On my system, there was a nested folder, so maybe
+    # it's like this for you, too.
+    if(NOT OpenCL_FOUND OR NOT OpenCL_INCLUDE_FOUND)
+      file(GLOB OPENCL_SDK_DIRS "C:/Program Files/OpenCL-SDK/*")
+
+      foreach(OPENCL_SDK_DIR ${OPENCL_SDK_DIRS})
+        message(STATUS "Checking OpenCL SDK directory: ${OPENCL_SDK_DIR}")
+        if(EXISTS "${OPENCL_SDK_DIR}/include/CL/cl.h")
+          if (NOT OpenCL_INCLUDE_FOUND)
+            message(STATUS "Found OpenCL headers in ${OPENCL_SDK_DIR}/include")
+            set(OpenCL_INCLUDE_FOUND TRUE)
+            set(OpenCL_INCLUDE_DIRS "${OPENCL_SDK_DIR}/include")
+          endif()
+            
+          if (NOT OpenCL_FOUND)
+            message(STATUS "Found OpenCL library in ${OPENCL_SDK_DIR}/lib")
+            set(OpenCL_FOUND TRUE)
+            set(OpenCL_LIBRARY "${OPENCL_SDK_DIR}/lib/OpenCL.lib")
+            set(OpenCL_LIBRARIES ${OpenCL_LIBRARY})
+          endif()
+          if (OpenCL_FOUND AND OpenCL_INCLUDE_FOUND)
+            break()
+          endif()
+        endif()
+      endforeach()
+    endif()
+
+    if(NOT OpenCL_FOUND)
+      message(FATAL_ERROR "OpenCL.dll not found. Please install the OpenCL SDK.")
+    endif()
+    if(NOT OpenCL_INCLUDE_FOUND)
+      message(FATAL_ERROR "OpenCL headers not found. Please install the OpenCL SDK.")
+    endif()
+  else()
+    message(FATAL_ERROR "OpenCL could not be found for your platform. Please install the OpenCL SDK.")
+  endif()
+endif()
+
+set(TRACE_CL_SOURCE "src/Trace.cl")
+set(TRACE_CL_OUT "src/kernelsource.hpp")
+file(READ ${TRACE_CL_SOURCE} TRACE_CL_CONTENTS)
+string(REPLACE "\\" "\\\\" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
+string(REPLACE "\n" "\\n" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
+string(REPLACE "\"" "\\\"" TRACE_CL_CONTENTS "${TRACE_CL_CONTENTS}")
+
+file(WRITE ${TRACE_CL_OUT} "// This file is auto-generated from ${TRACE_CL_SOURCE}. Do not edit directly; Changes will be overwritten!\n")
+file(APPEND ${TRACE_CL_OUT} "const char* kernel_source = \"${TRACE_CL_CONTENTS}\";\n")
+
+# Add the executable
+add_executable(${PROJECT_NAME} src/main.cpp)
+
+# Include GLFW headers
+# find_package(PkgConfig REQUIRED)
+# pkg_check_modules(GLFW REQUIRED glfw3)
+# target_link_libraries(${PROJECT_NAME} ${GLFW_LIBRARIES} ${OPENGL_LIBRARIES})
+# include_directories(${GLFW_INCLUDE_DIRS})
+# target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW_CFLAGS_OTHER})
+
+# Include OpenCL
+include_directories(${OpenCL_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME} ${OpenCL_LIBRARIES})
+if (WIN32)
+  # Most people who use Windows aren't nerds, therefore do not have C++ libraries installed
+  # So we will statically link the C++ runtime to avoid dependency on them (because on windows, they are actually static)
+  target_link_libraries(${PROJECT_NAME} -static)
+endif()
+
+# # ImGui sources
+# set(IMGUI_SOURCES external/imgui/imgui.cpp
+#                   external/imgui/imgui_draw.cpp
+#                   external/imgui/imgui_tables.cpp
+#                   external/imgui/imgui_widgets.cpp
+#                   external/imgui/backends/imgui_impl_glfw.cpp
+#                   external/imgui/backends/imgui_impl_opengl3.cpp)
+# add_library(imgui STATIC ${IMGUI_SOURCES})
+# # Include path
+# include_directories(external/imgui)
+
+# debug mode
+if(CMAKE_COMPILER_IS_GNUCXX)
+  if(MSVC OR MINGW)
+    # If using MinGW use `-lc++`
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -std=c++17")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -std=c++17")
+  else()
+    # For non-Windows GNU compilers (Linux), apply `-lstdc++` (only if using Clang/GCC with libc++)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -std=c++17 -lstdc++")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -std=c++17 -lstdc++")
+  endif()
+else() # Added these arguments for Clang (-stdlib=libc++ is not supported by g++)
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -g -stdlib=libc++")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -stdlib=libc++")
+endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
