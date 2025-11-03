@@ -6,6 +6,7 @@
 // #include "backends/imgui_impl_glfw.h"
 // #include "backends/imgui_impl_opengl3.h"
 // #include "imgui.h"
+#include <cstring>
 #include <numeric>
 
 bool windowIsFocused = true;
@@ -62,74 +63,134 @@ int main() {
     std::cerr << "Failed to get OpenCL platform IDs: " << getCLErrorString(err) << "\n";
     return 1;
   }
+  std::cout << "Found " << numPlatforms << " working OpenCL platform(s)." << std::endl;
+  // Enumerate platforms and devices, printing useful info for each.
+  cl_platform_id chosenPlatform = nullptr;
+  cl_device_id chosenDevice = nullptr;
+  bool foundGPU = false;
+  char chosenGPUname[128];
+  cl_device_id gpuIdxToDID[128] = {
+      0}; // 128 devices is a lot of devices. Should be adequate for your average user (especially since this is just a fun proof of concept!)
+  unsigned char gpuIdx = 0;
+  for (cl_uint pi = 0; pi < numPlatforms; ++pi) {
+    cl_platform_id plat = platforms[pi];
+    char buf[1024];
 
-  cl_platform_id platform = platforms[0]; // Pick one lol
-  char version[128];
-  clGetPlatformInfo(platform, CL_PLATFORM_VERSION, sizeof(version), version, nullptr);
-  std::cout << "OpenCL Version: " << version << std::endl;
+    clGetPlatformInfo(plat, CL_PLATFORM_NAME, sizeof(buf), buf, nullptr);
+    std::cout << "Platform " << pi << " Name: " << buf << std::endl;
+    clGetPlatformInfo(plat, CL_PLATFORM_VENDOR, sizeof(buf), buf, nullptr);
+    std::cout << "  Vendor: " << buf << std::endl;
+    clGetPlatformInfo(plat, CL_PLATFORM_VERSION, sizeof(buf), buf, nullptr);
+    std::cout << "  Version: " << buf << std::endl;
+    clGetPlatformInfo(plat, CL_PLATFORM_PROFILE, sizeof(buf), buf, nullptr);
+    std::cout << "  Profile: " << buf << std::endl;
 
-  cl_uint numDevices;
-  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get number of OpenCL devices: " << getCLErrorString(err) << "\n";
-    return 1;
-  }
-  std::vector<cl_device_id> devices(numDevices);
-  err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices.data(), nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get OpenCL device IDs: " << getCLErrorString(err) << "\n";
-    return 1;
-  }
-  cl_device_id device = devices[0]; // Pick one lol
-
-  // --- get device info
-  cl_uint compUnits = 0;
-  cl_ulong globalMem = 0;
-  err = clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), &compUnits, nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get device info (" << std::hex << device << std::dec << " (CL_DEVICE_MAX_COMPUTE_UNITS): " << getCLErrorString(err) << "\n";
-    return 1;
-  }
-  err = clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(cl_ulong), &globalMem, nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to get device info (" << std::hex << device << std::dec << " (CL_DEVICE_GLOBAL_MEM_SIZE): " << getCLErrorString(err) << "\n";
-    return 1;
-  }
-#if !defined(NODEBUG) && !defined(_NODEBUG)
-  {
-    for (size_t i = 0; i < devices.size(); i++) {
-      cl_device_id deviceFromList = devices[i];
-      char deviceName[128];
-      char deviceVendor[128];
-      cl_device_type deviceType;
-      err = clGetDeviceInfo(deviceFromList, CL_DEVICE_NAME, sizeof(deviceName), deviceName, nullptr);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to get device info (" << std::hex << deviceFromList << std::dec << " (CL_DEVICE_NAME): " << getCLErrorString(err) << "\n";
-        return 1;
-      }
-      err = clGetDeviceInfo(deviceFromList, CL_DEVICE_TYPE, sizeof(deviceType), &deviceType, nullptr);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to get device info (" << std::hex << deviceFromList << std::dec << " (CL_DEVICE_TYPE): " << getCLErrorString(err) << "\n";
-        return 1;
-      }
-      err = clGetDeviceInfo(deviceFromList, CL_DEVICE_VENDOR, sizeof(deviceVendor), deviceVendor, nullptr);
-      if (err != CL_SUCCESS) {
-        std::cerr << "Failed to get device info (" << std::hex << deviceFromList << std::dec << " (CL_DEVICE_VENDOR): " << getCLErrorString(err) << "\n";
-        return 1;
-      }
-      std::cout << "Device " << (i + 1) << " of " << devices.size() << " (" << std::hex << deviceFromList << std::dec << "): " << deviceName;
-      if (device == deviceFromList) {
-        std::cout << " [SELECTED]";
-      }
-      std::cout << "\n";
-      std::cout << "Compute Units: " << compUnits << "\n";
-      std::cout << "Global Memory: " << globalMem / (1024 * 1024) << " MB\n";
-      std::cout << "Device Type: " << (deviceType == CL_DEVICE_TYPE_GPU ? "GPU" : deviceType == CL_DEVICE_TYPE_CPU ? "CPU" : "Other") << "\n";
-      std::cout << "Device Vendor: " << deviceVendor << "\n";
+    cl_uint devCount = 0;
+    err = clGetDeviceIDs(plat, CL_DEVICE_TYPE_ALL, 0, nullptr, &devCount);
+    if (err != CL_SUCCESS || devCount == 0) {
+      std::cout << "  No devices found on this platform." << std::endl;
+      continue;
     }
-    std::cout << "-----------------------------------\n";
+
+    std::vector<cl_device_id> devs(devCount);
+    err = clGetDeviceIDs(plat, CL_DEVICE_TYPE_ALL, devCount, devs.data(), nullptr);
+    if (err != CL_SUCCESS) {
+      std::cerr << "  Failed to get device IDs for platform " << pi << ": " << getCLErrorString(err) << "\n";
+      continue;
+    }
+
+    for (cl_uint di = 0; di < devCount; ++di) {
+      cl_device_id d = devs[di];
+      char dname[512];
+      clGetDeviceInfo(d, CL_DEVICE_NAME, sizeof(dname), dname, nullptr);
+
+      cl_device_type dtype = 0;
+      clGetDeviceInfo(d, CL_DEVICE_TYPE, sizeof(dtype), &dtype, nullptr);
+      const char* typeStr = (dtype & CL_DEVICE_TYPE_GPU)           ? "GPU"
+                            : (dtype & CL_DEVICE_TYPE_CPU)         ? "CPU"
+                            : (dtype & CL_DEVICE_TYPE_ACCELERATOR) ? "ACCELERATOR"
+                                                                   : "UNKNOWN";
+
+      cl_uint computeUnits = 0;
+      clGetDeviceInfo(d, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(computeUnits), &computeUnits, nullptr);
+
+      cl_ulong globalMem = 0;
+      clGetDeviceInfo(d, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(globalMem), &globalMem, nullptr);
+
+      // Use KiB when < MiB, use MiB when < GiB, else use GiB (Terabyte devices would be hilarious to see, though)
+      // Also, if you are wondering, we use the binary prefixes because they are simply SUPERIOR! Screw your decimal bases!
+      // This is MEMORY LAND. We don't lie to inflate our numbers by saying "1 Gigabyte here!" when in fact it is 907 MB!!! Screw that!
+      std::string globalMemName;
+      if (globalMem < (1 << 10)) { // < 1 KiB
+        globalMemName = std::to_string(globalMem) + " B";
+      } else if (globalMem < (1 << 20)) { // < 1 MiB
+        globalMemName = std::to_string(globalMem >> 10) + " KiB";
+      } else if (globalMem < (1 << 30)) { // < 1 GiB
+        globalMemName = std::to_string(globalMem >> 20) + " MB";
+      } else {
+        globalMemName = std::to_string(globalMem >> 30) + " GiB";
+      }
+
+      size_t maxWorkGroup = 0;
+      clGetDeviceInfo(d, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(maxWorkGroup), &maxWorkGroup, nullptr);
+
+      std::cout << "  Device " << (int)gpuIdx << ": " << dname << " (" << typeStr << ")\n"
+                << "    Compute units: " << computeUnits << "\n"
+                << "    Global mem: " << globalMemName << "\n"
+                << "    Max work group size: " << maxWorkGroup << std::endl;
+
+      // Prefer the first GPU we find
+      if (!foundGPU && (dtype & CL_DEVICE_TYPE_GPU)) {
+        chosenPlatform = plat;
+        chosenDevice = d;
+        foundGPU = true;
+        strncpy(chosenGPUname, dname, sizeof(chosenGPUname));
+      }
+      gpuIdxToDID[gpuIdx] = d;
+      gpuIdx++;
+    }
   }
-#endif
+  // Ask the user for which GPU they would like to use.
+  if (gpuIdx < 1) {
+    std::cerr << "No OpenCL devices found on any platform." << std::endl;
+    return 1;
+  }
+
+  std::cout << "Enter the device numbers to use, separated by commas. (0-" << (int)(gpuIdx - 1) << ")\n(0 '" << chosenGPUname << "') > "
+            << std::flush;
+  size_t usedGPUIndeces[128] = {0};
+  size_t usedGPUcount = 0;
+  // User enters a comma separated list of GPU indices.
+  std::string gpuInput;
+  std::getline(std::cin, gpuInput);
+  if (gpuInput.empty()) {
+    // Default to the chosen GPU
+    usedGPUIndeces[usedGPUcount++] = 0;
+  } else {
+    std::stringstream ss(gpuInput);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+      try {
+        size_t idx = std::stoul(token);
+        if (idx < 128) {
+          usedGPUIndeces[usedGPUcount++] = idx;
+        } else {
+          std::cerr << "Invalid GPU index: " << idx << ". Skipping." << std::endl;
+        }
+      } catch (...) {
+        std::cerr << "Invalid input: " << token << ". Skipping." << std::endl;
+      }
+    }
+  }
+
+  if (chosenPlatform == nullptr || chosenDevice == nullptr) {
+    std::cerr << "Failed to select a usable device on any platform." << std::endl;
+    return 1;
+  }
+
+  // Export the chosen platform/device to variables used later
+  cl_platform_id platform = chosenPlatform; // Picked platform
+  cl_device_id device = chosenDevice;       // Picked device
 
   std::cout << "Please enter a width, in pixels. For example, 1920, 3840, ...\n(" << WIDTH << ") > " << std::flush;
   if (!parseDefaultInput(std::cin, &WIDTH, true)) {
@@ -144,13 +205,15 @@ int main() {
   }
 
   std::cout << "Please enter how many rays per pixel to shoot. Higher = better quality,"
-               "but slower. 100-500 is a bare minimum.\n(" << RAYS_PER_PIXEL << ") > " << std::flush;
+               "but slower. 100-500 is a bare minimum.\n("
+            << RAYS_PER_PIXEL << ") > " << std::flush;
   if (!parseDefaultInput(std::cin, &RAYS_PER_PIXEL, true)) {
     std::cerr << "Invalid input for rays per pixel. Please enter a numeric value.\nExiting..." << std::endl;
     return 1;
   }
   std::cout << "Please enter the maximum number of bounces per ray. Higher = better quality,"
-               "but slower, with diminishing returns. 50+ is a good trade-off.\n(" << MAX_BOUNCE_COUNT << ") > " << std::flush;
+               "but slower, with diminishing returns. 50+ is a good trade-off.\n("
+            << MAX_BOUNCE_COUNT << ") > " << std::flush;
   if (!parseDefaultInput(std::cin, &MAX_BOUNCE_COUNT, true)) {
     std::cerr << "Invalid input for max bounce count. Please enter a numeric value.\nExiting..." << std::endl;
     return 1;
@@ -170,39 +233,16 @@ int main() {
     std::cout << "Invalid tile size, using " << TILE_SIZE << " instead.\n";
   }
 
-  cl_context ctx = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create context: " << getCLErrorString(err) << "\n";
-    return 1;
+  std::vector<KernelContext> deviceKernels;
+  deviceKernels.reserve(usedGPUcount);
+
+  for (size_t i = 0; i < usedGPUcount; i++) {
+    cl_device_id d = gpuIdxToDID[usedGPUIndeces[i]];
+    if (d != 0) {
+      deviceKernels.emplace_back(generateKernelForDevice(d));
+    }
   }
-  cl_command_queue queue = clCreateCommandQueueWithProperties(ctx, device, nullptr, &err);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create command queue: " << getCLErrorString(err) << "\n";
-    return 1;
-  }
-  std::string kernelSource = loadKernelSource();
-  const char* data = kernelSource.data();
-  cl_program program = clCreateProgramWithSource(ctx, 1, &data, nullptr, &err);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create program: " << getCLErrorString(err) << "\n";
-    return 1;
-  }
-  const char* buildOptions = "-cl-fast-relaxed-math -cl-mad-enable"; // Fast math yay
-  err = clBuildProgram(program, 1, &device, buildOptions, nullptr, nullptr);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to build program: " << getCLErrorString(err) << "\n";
-    size_t logSize;
-    clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
-    std::vector<char> log(logSize);
-    clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, logSize, log.data(), nullptr);
-    std::cerr << "Build log:\n" << log.data() << std::endl;
-    return 1;
-  }
-  cl_kernel kernel = clCreateKernel(program, "raytrace", &err);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to create kernel: " << getCLErrorString(err) << "\n";
-    return 1;
-  }
+
   MeshInfo mesh = loadMeshFromOBJFile(OBJECT_PATH);
   // mesh.material = {
   //     .type = MaterialType_Glassy,
@@ -223,7 +263,8 @@ int main() {
       .specularProbability = 1.0f,
   };
   // dragon:
-  mesh.scale = 0.65f;
+  mesh.scale = 0.5f;
+
   // mesh.scale = 200.0f;
   // CAMERA_START_Y -= 60.0f;
   // mesh.pos.s[1] += 60.0f;
@@ -253,7 +294,7 @@ int main() {
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 #endif
 
-  std::vector<unsigned char> pixels(WIDTH * HEIGHT * 4, 0);
+  std::vector<unsigned char> pixels(WIDTH * HEIGHT * 4, 0u);
   meshList.emplace_back(mesh);
   CameraInformation camInfo = {.position = {CAMERA_START_X, CAMERA_START_Y, CAMERA_START_Z},
                                .pitch = CAMERA_START_PITCH,
@@ -261,32 +302,32 @@ int main() {
                                .roll = CAMERA_START_ROLL,
                                .fov = 90.0f,
                                .aspectRatio = (float)WIDTH / (float)HEIGHT};
-
-  err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
-  if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
   cl_uint numFrames = 0;
-  err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
-  if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
   cl_uint bounceCount = MAX_BOUNCE_COUNT;
   cl_uint raysPerPixel = RAYS_PER_PIXEL;
-  err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
-  if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
+  for (KernelContext kernel : deviceKernels) {
+    err = clSetKernelArg(kernel.kernel, 6, sizeof(CameraInformation), &camInfo);
+    if (err != CL_SUCCESS) {
+      std::cerr << "failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
+      return 1;
+    }
+    err = clSetKernelArg(kernel.kernel, 7, sizeof(cl_int), &numFrames);
+    if (err != CL_SUCCESS) {
+      std::cerr << "failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
+      return 1;
+    }
+    err = clSetKernelArg(kernel.kernel, 10, sizeof(cl_int), &raysPerPixel);
+    if (err != CL_SUCCESS) {
+      std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
+      return 1;
+    }
 
-  err = clFinish(queue);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
-    return 1;
+    err = clFinish(kernel.queue);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
+      return 1;
+    }
   }
-  Buffers buffers;
 #ifndef RENDER_AND_GET_OUT
   std::chrono::high_resolution_clock::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
   glfwSetWindowFocusCallback(window, [](GLFWwindow* win, int focused) { windowIsFocused = focused != 0; });
@@ -487,20 +528,20 @@ int main() {
       camInfo.yaw += rotSpeed * deltaSeconds;
     }
     // Update camera info arg
-    err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
+    err = clSetKernelArg(kernel.kernel, 6, sizeof(CameraInformation), &camInfo);
     if (err != CL_SUCCESS) {
       std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
     }
-    err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
+    err = clSetKernelArg(kernel.kernel, 7, sizeof(cl_int), &numFrames);
     if (err != CL_SUCCESS) {
       std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
     }
-    err = clSetKernelArg(kernel, 9, sizeof(cl_int), &bounceCount);
+    err = clSetKernelArg(kernel.kernel, 9, sizeof(cl_int), &bounceCount);
     if (err != CL_SUCCESS) {
       std::cerr << "failed to set kernel arg bounce count: " << getCLErrorString(err) << std::endl;
       return 1;
     }
-    err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
+    err = clSetKernelArg(kernel.kernel, 10, sizeof(cl_int), &raysPerPixel);
     if (err != CL_SUCCESS) {
       std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
       return 1;
@@ -611,71 +652,95 @@ int main() {
   // Cleanup
   glDeleteTextures(1, &texture);
 #else
-  err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
-  err = clSetKernelArg(kernel, 7, sizeof(cl_int), &numFrames);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
-  err = clSetKernelArg(kernel, 9, sizeof(cl_int), &bounceCount);
-  if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg bounce count: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
-  err = clSetKernelArg(kernel, 10, sizeof(cl_int), &raysPerPixel);
-  if (err != CL_SUCCESS) {
-    std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
-  if (VIDEO_FRAME_COUNT > 1) {
-    // Loop it as if this were a video!
-    int videoFrameIdx = 0;
-    while (videoFrameIdx < VIDEO_FRAME_COUNT) {
-      setupNextVideoFrame(camInfo, videoFrameIdx++);
-      buffers = generateBuffers(triangleList, meshList, nodeList, ctx, kernel);
-      std::cout << "Rendering video frame " << (videoFrameIdx) << " of " << VIDEO_FRAME_COUNT << std::endl;
-      // In this context, "numFrames" is still the pRNG seed for the current averaged-together image.
-      std::string path = std::string(VIDEO_FRAME_OUTPUT_DIR) + "/output_" + std::to_string(videoFrameIdx) + ".bmp";
-      accumulateAndRenderFrame(pixels, numFrames, err, kernel, camInfo, queue, buffers, path, videoFrameIdx);
-      releaseBuffers(buffers);
+  for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    KernelContext& kernel = deviceKernels[i];
+    err = clSetKernelArg(kernel.kernel, 6, sizeof(CameraInformation), &camInfo);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
+      return 1;
     }
-    // We're done!
+    err = clSetKernelArg(kernel.kernel, 7, sizeof(cl_int), &numFrames);
+    if (err != CL_SUCCESS) {
+      std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
+      return 1;
+    }
+    err = clSetKernelArg(kernel.kernel, 9, sizeof(cl_int), &bounceCount);
+    if (err != CL_SUCCESS) {
+      std::cerr << "failed to set kernel arg bounce count: " << getCLErrorString(err) << std::endl;
+      return 1;
+    }
+    err = clSetKernelArg(kernel.kernel, 10, sizeof(cl_int), &raysPerPixel);
+    if (err != CL_SUCCESS) {
+      std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
+      return 1;
+    }
+  }
+  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), TILE_SIZE);
+  // Compute number of tiles in X and Y using ceiling division so partial tiles are
+  // counted. totalTiles should be tilesX * tilesY, not floor((w*h)/(t*t)).
+  size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
+  size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
+  size_t totalTiles = totalTilesX * totalTilesY;
+  TileInformation tileInfo = {.tileSize = tileSize, .totalTilesX = totalTilesX, .totalTilesY = totalTilesY, .totalTiles = totalTiles};
+  float tilesPerDevice = (float)tileInfo.totalTiles / (float)usedGPUcount;
+  if (VIDEO_FRAME_COUNT > 1) {
+    // // Loop it as if this were a video!
+    // int videoFrameIdx = 0;
+    // while (videoFrameIdx < VIDEO_FRAME_COUNT) {
+    //   for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    //     KernelContext& kernel = deviceKernels[i];
+    //     setupNextVideoFrame(camInfo, videoFrameIdx++);
+    //     Buffers buffers = generateBuffers(triangleList, meshList, nodeList, kernel.ctx, kernel.kernel);
+    //     std::cout << "Rendering video frame " << (videoFrameIdx) << " of " << VIDEO_FRAME_COUNT << std::endl;
+    //     // In this context, "numFrames" is still the pRNG seed for the current averaged-together image.
+    //     numFrames = 0; // Reset for each GPU
+    //     accumulateAndRenderFrame(pixels, numFrames, err, kernel.kernel, camInfo, kernel.queue, buffers, tileInfo, tilesPerDevice * i,
+    //                              (size_t)tilesPerDevice * (i + 1), videoFrameIdx);
+    //     releaseBuffers(buffers);
+    //   }
+    //   std::string path = std::string(VIDEO_FRAME_OUTPUT_DIR) + "/output_" + std::to_string(videoFrameIdx) + ".bmp";
+    //   placeImageDataIntoBMP(pixels, WIDTH, HEIGHT, path);
+    // }
+    // // We're done!
   } else {
     setupNextVideoFrame(camInfo, 0);
-    buffers = generateBuffers(triangleList, meshList, nodeList, ctx, kernel);
-    accumulateAndRenderFrame(pixels, numFrames, err, kernel, camInfo, queue, buffers, "output.bmp");
+    std::vector<Buffers> buffersList(deviceKernels.size());
+
+    for (size_t i = 0; i < deviceKernels.size(); ++i) {
+      KernelContext& kernel = deviceKernels[i];
+      buffersList[i] = generateBuffers(triangleList, meshList, nodeList, kernel.ctx, kernel.kernel);
+      err = clSetKernelArg(kernel.kernel, 6, sizeof(CameraInformation), &camInfo);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
+        exit(1);
+      }
+    }
+
+    if (usedGPUcount > 1) {
+      multiThreadedCompute(tileSize, deviceKernels, pixels, buffersList);
+    } else {
+      singleThreadedCompute(tileSize, deviceKernels[0], pixels, buffersList[0]);
+    }
+
+    placeImageDataIntoBMP(pixels, WIDTH, HEIGHT, "output.bmp");
+  }
+
+  for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    releaseKernelContext(deviceKernels[i]);
   }
 // We're done!
 #endif
-  err = releaseBuffers(buffers);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release buffers: " << getCLErrorString(err) << std::endl;
-    return 1;
+  for (size_t i = 0; i < usedGPUcount; i++) {
+    cl_device_id d = gpuIdxToDID[usedGPUIndeces[i]];
+    if (d != 0) {
+      err = clReleaseDevice(d);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to release device: " << getCLErrorString(err) << std::endl;
+        return 1;
+      }
+    }
   }
-  err = clReleaseKernel(kernel);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release kernel: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
-  err = clReleaseProgram(program);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release program: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
-  err = clReleaseCommandQueue(queue);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release command queue: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
-  err = clReleaseContext(ctx);
-  if (err != CL_SUCCESS) {
-    std::cerr << "Failed to release context: " << getCLErrorString(err) << std::endl;
-    return 1;
-  }
+
   err = clReleaseDevice(device);
   if (err != CL_SUCCESS && err != CL_INVALID_DEVICE) {
     std::cerr << "Failed to release device: " << getCLErrorString(err) << std::endl;

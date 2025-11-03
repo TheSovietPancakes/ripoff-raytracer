@@ -399,7 +399,7 @@ void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color
                            .color = color,
                            .emissionColor = {0, 0, 0},
                            .emissionStrength = 0.0f,
-                           .reflectiveness = 0.0f,
+                           .reflectiveness = 1.0f,
                            .specularProbability = 1.0f,
                        }};
 

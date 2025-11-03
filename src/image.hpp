@@ -5,6 +5,9 @@
 #include "readobj.hpp"
 #include "settings.hpp"
 
+#include <mutex>
+#include <queue>
+
 std::string loadKernelSource(/* const std::string& filename */) {
 #include "kernelsource.hpp"
   return kernel_source;
@@ -16,6 +19,80 @@ struct Buffers {
   cl_mem imageBuffer = nullptr;
   cl_mem nodeBuffer = nullptr;
 };
+
+struct KernelContext {
+  cl_kernel kernel = nullptr;
+  cl_context ctx = nullptr;
+  cl_command_queue queue = nullptr;
+  cl_program program = nullptr;
+};
+
+KernelContext generateKernelForDevice(cl_device_id device) {
+  cl_int err;
+  cl_context ctx = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create context: " << getCLErrorString(err) << "\n";
+    exit(1);
+  }
+  cl_command_queue queue = clCreateCommandQueueWithProperties(ctx, device, nullptr, &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create command queue: " << getCLErrorString(err) << "\n";
+    exit(1);
+  }
+  std::string kernelSource = loadKernelSource();
+  const char* data = kernelSource.data();
+  cl_program program = clCreateProgramWithSource(ctx, 1, &data, nullptr, &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create program: " << getCLErrorString(err) << "\n";
+    exit(1);
+  }
+  const char* buildOptions = "-cl-fast-relaxed-math -cl-mad-enable"; // Fast math yay
+  err = clBuildProgram(program, 1, &device, buildOptions, nullptr, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to build program: " << getCLErrorString(err) << "\n";
+    size_t logSize;
+    clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
+    std::vector<char> log(logSize);
+    clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, logSize, log.data(), nullptr);
+    std::cerr << "Build log:\n" << log.data() << std::endl;
+    exit(1);
+  }
+  cl_kernel kernel = clCreateKernel(program, "raytrace", &err);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to create kernel: " << getCLErrorString(err) << "\n";
+    exit(1);
+  }
+  return KernelContext{
+      .kernel = kernel,
+      .ctx = ctx,
+      .queue = queue,
+      .program = program,
+  };
+}
+
+void releaseKernelContext(KernelContext& kernel) {
+  cl_int err;
+  err = clReleaseKernel(kernel.kernel);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release kernel: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+  err = clReleaseProgram(kernel.program);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release program: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+  err = clReleaseCommandQueue(kernel.queue);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release command queue: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+  err = clReleaseContext(kernel.ctx);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to release context: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+}
 
 Buffers generateBuffers(std::vector<Triangle>& triangleList, std::vector<MeshInfo>& meshList, std::vector<Node>& nodeList, cl_context& ctx,
                         cl_kernel& kernel) {
@@ -131,133 +208,174 @@ cl_int releaseBuffers(Buffers& buffers) {
   return err;
 }
 
-void accumulateAndRenderFrame(std::vector<unsigned char>& pixels, cl_uint& numFrames, cl_int& err, cl_kernel kernel, CameraInformation& camInfo,
-                              cl_command_queue& queue, Buffers& buffers, const std::string& outputLocation, size_t seed = 0) {
-  // Render the image. Enqueue the kernel 'FRAME_TOTAL' times and average the results.
-  static std::vector<uint32_t> intBuffer(pixels.size(), 0u);
-  std::chrono::high_resolution_clock::time_point startTime = std::chrono::high_resolution_clock::now();
-  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), TILE_SIZE);
-  size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
-  size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
-  size_t totalTiles = totalTilesX * totalTilesY;
-  float msPerFrame = -0.0f; // for a more accurate "time remaining" estimate
-  while (numFrames < FRAME_TOTAL) {
-    size_t tileIndex = 0;
-    for (size_t x = 0; x < WIDTH; x += tileSize) {
-      for (size_t y = 0; y < HEIGHT; y += tileSize) {
-        int w = std::min(tileSize, WIDTH - x);
-        int h = std::min(tileSize, HEIGHT - y);
+struct TileInformation {
+  size_t tileSize;
+  size_t totalTilesX;
+  size_t totalTilesY;
+  size_t totalTiles;
+};
 
-        size_t globalSize[2] = {(size_t)w, (size_t)h};
-        size_t globalOffset[2] = {(size_t)x, (size_t)y};
+void renderTile(std::vector<unsigned char>& pixels, cl_kernel kernel, cl_command_queue& queue, Buffers& buffers, size_t tileX, size_t tileY,
+                size_t tileSize, cl_uint frameIndex, size_t seed, std::mutex* pixelsMutex = nullptr) {
+  // Render a single tile
+  cl_int err;
+  int w = std::min(tileSize, WIDTH - tileX);
+  int h = std::min(tileSize, HEIGHT - tileY);
 
-        float percentDoneThisFrame = ((float)tileIndex / (float)totalTiles);
-        float percentDone = ((float)numFrames / FRAME_TOTAL);
-        percentDone += percentDoneThisFrame / FRAME_TOTAL;
-        std::cout << "\rRendering frame " << (numFrames + 1) << " of " << FRAME_TOTAL << " (" << std::fixed << std::setprecision(2)
-                  << (percentDone * 100.0f) << "%) ...";
-        if (numFrames > 0 || x > 0 || y > 0) { // Ensure we are not on the first tile of the first frame
-          // Calculate overall progress based on frames and tiles
-          float timeRemaining;
-          if (msPerFrame == -0.0f) {
-            std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
-            auto deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(nowTime - startTime);
-            // no need to calculate msPerFrame since the entire purpose of that variable is to be used once a full
-            // frame has actually been rendered
-            timeRemaining = ((float)deltaTime.count() / (float)(numFrames + percentDoneThisFrame)) *
-                            ((float)(FRAME_TOTAL - numFrames) - percentDoneThisFrame) / 1000.0f;
-          } else {
-            // We have an average! Yay!
-            float totalFramesLeft = (FRAME_TOTAL - 2) - numFrames; // -2 because off-by-1 and because we are mid render
-            float currentFrameLeft = 1.0f - percentDoneThisFrame;
-            timeRemaining = ((totalFramesLeft + currentFrameLeft) * msPerFrame) / 1000.0f;
-          }
-          if (timeRemaining > 60.0f) {
-            unsigned long minutes = (unsigned long)(timeRemaining / 60.0f);
-            unsigned long seconds = (unsigned long)(timeRemaining) % 60;
-            std::cout << " (time remaining: " << minutes << "m" << seconds << "s) ";
-          } else {
-            std::cout << " (time remaining: " << std::fixed << std::setprecision(2) << timeRemaining << "s) ";
-          }
-        }
-        std::cout << std::flush;
-        err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        size_t pRNGseed = ((numFrames << 3) * (totalTiles << 1) + (tileIndex << 4) * 0x857379583) * (seed << 8); // A bunch of random nonsense to it
-        err = clSetKernelArg(kernel, 7, sizeof(cl_int), &pRNGseed);
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to enqueue kernel: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        tileIndex++;
-        err = clFinish(queue); // safer than flush when reading back
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-      }
-    }
-    err = clEnqueueReadBuffer(queue, buffers.imageBuffer, CL_TRUE, 0, pixels.size(), pixels.data(), 0, nullptr, nullptr);
-    if (err != CL_SUCCESS) {
-      std::cerr << "Failed to read buffer: " << getCLErrorString(err) << std::endl;
-      exit(1);
-    }
+  size_t globalSize[2] = {(size_t)w, (size_t)h};
+  size_t globalOffset[2] = {tileX, tileY};
 
-    for (size_t i = 0; i < pixels.size(); ++i) {
-      intBuffer[i] += pixels[i];
-    }
-
-    numFrames++;
-
-    // Set the time per frame
-    std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
-    auto deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(nowTime - startTime);
-    msPerFrame = (deltaTime.count()) / (float)(numFrames);
-
-#ifdef RELAX_GPU
-    if (numFrames == FRAME_TOTAL - 1)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    if (FRAME_TOTAL > 10 && numFrames % 10 == 0 && numFrames < FRAME_TOTAL) {
-      // Every 10 frames, output a quick preview to the screen
-      std::cout << "\nWriting preview file..." << std::flush;
-      std::vector<unsigned char> accumBuffer(pixels.size());
-      for (size_t i = 0; i < pixels.size(); ++i) {
-        accumBuffer[i] = static_cast<unsigned char>(intBuffer[i] / numFrames);
-      }
-      placeImageDataIntoBMP(accumBuffer, WIDTH, HEIGHT, "preview.bmp");
-      std::cout << " done (" << numFrames / 10 << "/" << (FRAME_TOTAL / 10) << ")" << std::flush;
-    }
-#endif
+  cl_int pRNGseed = (cl_int)(((frameIndex << 3) * (tileY * ((WIDTH + tileSize - 1) / tileSize) + tileX) * 0x857379583) * (seed << 8));
+  err = clSetKernelArg(kernel, 7, sizeof(cl_int), &pRNGseed);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to set kernel arg PRNG seed: " << getCLErrorString(err) << std::endl;
+    exit(1);
   }
-  std::chrono::high_resolution_clock::time_point endTime = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<float> deltaTime = endTime - startTime;
-  unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(deltaTime).count();
-  if (millisecondsPassed > 0)
-    std::cout << "\rRendering frame " << FRAME_TOTAL << " of " << FRAME_TOTAL << " (100.00%) ... done in " << (millisecondsPassed / 1000.0)
-              << " seconds" << std::endl;
-  // Average the results (divide)
-  std::vector<unsigned char> finalImg(pixels.size());
-  for (size_t i = 0; i < pixels.size(); ++i) {
-    finalImg[i] = static_cast<unsigned char>(std::min<uint32_t>(255u, intBuffer[i] / FRAME_TOTAL));
+
+  err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to enqueue kernel: " << getCLErrorString(err) << std::endl;
+    exit(1);
   }
-  placeImageDataIntoBMP(finalImg, WIDTH, HEIGHT, outputLocation);
-  std::cout << "Wrote " << outputLocation << " with " << WIDTH << "x" << HEIGHT << " resolution." << std::endl;
-  finalImg.clear();
-  finalImg.resize(WIDTH * HEIGHT * 4, 0);
-  intBuffer.clear();
-  intBuffer.resize(pixels.size(), 0u);
-  pixels.clear();
-  pixels.resize(WIDTH * HEIGHT * 4, 0);
-  numFrames = 0;
+
+  err = clFinish(queue);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+
+  // Read back the rendered tile
+  std::vector<unsigned char> readIntoPixels(WIDTH * HEIGHT * 4, 0u);
+  err = clEnqueueReadBuffer(queue, buffers.imageBuffer, CL_TRUE, 0, readIntoPixels.size(), readIntoPixels.data(), 0, nullptr, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to read buffer: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+
+  // Copy tile pixels to main pixel buffer
+  if (pixelsMutex) {
+    pixelsMutex->lock();
+  }
+
+  for (size_t pixelY = 0; pixelY < h; pixelY++) {
+    for (size_t pixelX = 0; pixelX < w; pixelX++) {
+      size_t globalX = tileX + pixelX;
+      size_t globalY = tileY + pixelY;
+      if (globalX >= WIDTH || globalY >= HEIGHT)
+        continue;
+
+      size_t pixelIndex = (globalY * WIDTH + globalX) * 4;
+      pixels[pixelIndex + 0] = readIntoPixels[pixelIndex + 0]; // R
+      pixels[pixelIndex + 1] = readIntoPixels[pixelIndex + 1]; // G
+      pixels[pixelIndex + 2] = readIntoPixels[pixelIndex + 2]; // B
+      pixels[pixelIndex + 3] = 255;                            // A
+    }
+  }
+
+  if (pixelsMutex) {
+    pixelsMutex->unlock();
+  }
+}
+
+void multiThreadedCompute(size_t tileSize, std::vector<KernelContext>& deviceKernels, std::vector<unsigned char>& pixels,
+                          std::vector<Buffers>& buffersList) {
+  cl_int err;
+  std::chrono::high_resolution_clock::time_point frameStartTime = std::chrono::high_resolution_clock::now();
+  std::mutex pixelsMutex;
+  std::mutex queueMutex;
+  std::queue<std::pair<size_t, size_t>> tileQueue; // Queue of (tileX, tileY) pairs
+
+  // Populate the tile queue with all tile coordinates
+  for (size_t tileY = 0; tileY < HEIGHT; tileY += tileSize) {
+    for (size_t tileX = 0; tileX < WIDTH; tileX += tileSize) {
+      tileQueue.push({tileX, tileY});
+    }
+  }
+
+  size_t tilesTotal = tileQueue.size();
+
+  std::vector<std::thread> threads;
+
+  // Launch threads for each device
+  for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    threads.emplace_back([&, i]() {
+      KernelContext& kernel = deviceKernels[i];
+      Buffers& buffers = buffersList[i];
+      size_t seed = i * 12345; // Different seed per device
+
+      while (true) {
+        std::pair<size_t, size_t> currentTile;
+        {
+          std::lock_guard<std::mutex> lock(queueMutex);
+          if (tileQueue.empty()) {
+            break;
+          }
+          currentTile = tileQueue.front();
+          tileQueue.pop();
+          // Each time a tile is popped off, we will print out the progress to the console
+          std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
+          std::chrono::duration timeElapsed = nowTime - frameStartTime;
+          double percentCompleted = ((double)(tilesTotal - tileQueue.size()) / (double)tilesTotal) * 100.0;
+          unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(timeElapsed).count();
+          // Remaining Time = Time Passed * (1 / Percent Completed - 1)
+          std::cout << "\033[2K\rRendering tile " << (tilesTotal - tileQueue.size()) << " of " << tilesTotal << " (" << percentCompleted << "%) "
+                    << millisecondsPassed << "ms elapsed; " << (unsigned long)(millisecondsPassed * ((100.0 / percentCompleted) - 1.0))
+                    << "ms remaining" << std::flush;
+        }
+
+        size_t tileX = currentTile.first;
+        size_t tileY = currentTile.second;
+
+        renderTile(pixels, kernel.kernel, kernel.queue, buffers, tileX, tileY, tileSize, 0, seed, &pixelsMutex);
+        seed++; // Update seed for next tile
+      }
+    });
+  }
+
+  // Wait for all threads to complete
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::chrono::high_resolution_clock::time_point frameEndTime = std::chrono::high_resolution_clock::now();
+  std::chrono::duration frameDuration = frameEndTime - frameStartTime;
+  unsigned long frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frameDuration).count();
+  std::cout << "\nRendered image in " << frameMilliseconds << " ms." << std::endl;
+
+  // Release buffers for each device
+  for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    releaseBuffers(buffersList[i]);
+  }
+}
+
+void singleThreadedCompute(size_t tileSize, KernelContext& deviceKernel, std::vector<unsigned char>& pixels, Buffers& buffers) {
+  cl_int err;
+  std::chrono::high_resolution_clock::time_point frameStartTime = std::chrono::high_resolution_clock::now();
+  size_t tilesTotal = ((WIDTH + tileSize - 1) / tileSize) * ((HEIGHT + tileSize - 1) / tileSize);
+  size_t tilesCompleted = 0;
+
+  for (size_t tileY = 0; tileY < HEIGHT; tileY += tileSize) {
+    for (size_t tileX = 0; tileX < WIDTH; tileX += tileSize) {
+      renderTile(pixels, deviceKernel.kernel, deviceKernel.queue, buffers, tileX, tileY, tileSize, 0, 0);
+
+      tilesCompleted++;
+      std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
+      std::chrono::duration timeElapsed = nowTime - frameStartTime;
+      double percentCompleted = ((double)tilesCompleted / (double)tilesTotal) * 100.0;
+      unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(timeElapsed).count();
+      // Remaining Time = Time Passed * (1 / Percent Completed - 1)
+      std::cout << "\033[2K\rRendering tile " << tilesCompleted << " of " << tilesTotal << " (" << percentCompleted << "%) " << millisecondsPassed
+                << "ms elapsed; " << (unsigned long)(millisecondsPassed * ((100.0 / percentCompleted) - 1.0)) << "ms remaining" << std::flush;
+    }
+  }
+
+  std::chrono::high_resolution_clock::time_point frameEndTime = std::chrono::high_resolution_clock::now();
+  std::chrono::duration frameDuration = frameEndTime - frameStartTime;
+  unsigned long frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frameDuration).count();
+  std::cout << "\nRendered image in " << frameMilliseconds << " ms." << std::endl;
+
+  // Release buffers
+  releaseBuffers(buffers);
 }
 
 // This function is called before ever video frame starts rendering,
@@ -291,15 +409,12 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
   addQuad(cl_float3{minX, minY, minZ}, cl_float3{maxX, minY, minZ}, cl_float3{maxX, minY, maxZ}, cl_float3{minX, minY, maxZ}, cl_float3{0, 1, 0},
           cl_float3{0.0f, 0.8f, 0.0f});
   meshList.back().material = {
-      // .type = MaterialType_Checker,
-      // .color = {0.05, 0.22, 0.05},
-      // .emissionColor = {0.075, 0.4, 0.075},
-      // .emissionStrength = 40.0f,
-      .type = MaterialType_Solid,
-      .color = {0.7, 0.7, 0.7},
-      .emissionColor = {0.0f, 0.0f, 0.0f},
-      .emissionStrength = 0.0f,
-      .reflectiveness = 0.0f,
+      .type = MaterialType_Checker,
+      .ior = 1.0f,
+      .color = {0.05, 0.05, 0.05},
+      .emissionColor = {0.1, 0.1, 0.1},
+      .emissionStrength = 40.0f,
+      .reflectiveness = 1.0f,
       .specularProbability = 1.0f,
   };
 
@@ -311,8 +426,9 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
   meshList.back().material.type = MaterialType_OneSided; // invisible wall from back
 
   // Back wall (Z = minZ)
-  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {0.1f, 0.1f, 0.1f});
-  // meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
+  // addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {0.1f, 0.1f, 0.1f});
+  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {1.0f, 1.0f, 1.0f});
+  meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
 
   // Left wall (X = minX) Blue
   addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.8f});

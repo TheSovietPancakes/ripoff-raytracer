@@ -197,6 +197,12 @@ bool parseDefaultInput(std::istream& in, T* out, bool isNumeric) {
       } else if (typeid(out) == typeid(float*)) {
         float val = std::stof(line);
         *(float*)out = val;
+      } else if (typeid(out) == typeid(char*))  {
+        char val = static_cast<char>(std::stoi(line));
+        *(char*)out = val;
+      } else if (typeid(out) == typeid(unsigned char*))  {
+        unsigned char val = static_cast<unsigned char>(std::stoi(line));
+        *(unsigned char*)out = val;
       } else {
         return false; // unsupported type
       }
