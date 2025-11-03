@@ -5,6 +5,9 @@
 #include "readobj.hpp"
 #include "settings.hpp"
 
+#include <mutex>
+#include <queue>
+
 std::string loadKernelSource(/* const std::string& filename */) {
 #include "kernelsource.hpp"
   return kernel_source;
@@ -212,83 +215,167 @@ struct TileInformation {
   size_t totalTiles;
 };
 
-void accumulateAndRenderFrame(std::vector<unsigned char>& pixels, cl_uint& numFrames, cl_int& err, cl_kernel kernel, CameraInformation& camInfo,
-                              cl_command_queue& queue, Buffers& buffers, TileInformation info, size_t tilesToCompute, size_t tileStartPos = 0,
-                              size_t seed = 0) {
-  // Render the image. Enqueue the kernel 'FRAME_TOTAL' times and average the results.
-  std::vector<unsigned char> intBuffer(pixels.size(), 0u);
-  std::vector<unsigned char> readIntoPixels(pixels.size(), 0u);
-  while (numFrames < FRAME_TOTAL) {
-    size_t tileIndex = 0;
-    for (size_t x = 0; x < WIDTH; x += info.tileSize) {
-      for (size_t y = 0; y < HEIGHT; y += info.tileSize) {
-        tileIndex++;
-        if (tileIndex < tileStartPos || tileIndex > tileStartPos + tilesToCompute)
-          continue;
-        int w = std::min(info.tileSize, WIDTH - x);
-        int h = std::min(info.tileSize, HEIGHT - y);
+void renderTile(std::vector<unsigned char>& pixels, cl_kernel kernel, cl_command_queue& queue, Buffers& buffers, size_t tileX, size_t tileY,
+                size_t tileSize, cl_uint frameIndex, size_t seed, std::mutex* pixelsMutex = nullptr) {
+  // Render a single tile
+  cl_int err;
+  int w = std::min(tileSize, WIDTH - tileX);
+  int h = std::min(tileSize, HEIGHT - tileY);
 
-        size_t globalSize[2] = {(size_t)w, (size_t)h};
-        size_t globalOffset[2] = {(size_t)x, (size_t)y};
+  size_t globalSize[2] = {(size_t)w, (size_t)h};
+  size_t globalOffset[2] = {tileX, tileY};
 
-        std::cout << std::flush;
-        err = clSetKernelArg(kernel, 6, sizeof(CameraInformation), &camInfo);
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        size_t pRNGseed =
-            ((numFrames << 3) * (info.totalTiles << 1) + (tileIndex << 4) * 0x857379583) * (seed << 8); // A bunch of random nonsense to it
-        err = clSetKernelArg(kernel, 7, sizeof(cl_int), &pRNGseed);
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to set kernel arg num frames: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to enqueue kernel: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        err = clFinish(queue); // safer than flush when reading back
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        // Move modified pixels into the buffer
-        err = clEnqueueReadBuffer(queue, buffers.imageBuffer, CL_TRUE, 0, readIntoPixels.size(), readIntoPixels.data(), 0, nullptr, nullptr);
-        if (err != CL_SUCCESS) {
-          std::cerr << "Failed to read buffer: " << getCLErrorString(err) << std::endl;
-          exit(1);
-        }
-        // Use w, h, x, y, to find the pixels within this tile.
-        for (size_t pixelX = 0; pixelX < w; pixelX++) {
-          for (size_t pixelY = 0; pixelY < h; pixelY++) {
-            // Find the X and Y position within the entire image based on the X and Y position of the current tile
-            size_t globalX = (x * info.tileSize) + pixelX;
-            size_t globalY = (y * info.tileSize) + pixelY;
-            size_t pixelIndex = (globalY * WIDTH + globalX) * 4;
-            if (globalX >= WIDTH || globalY >= HEIGHT)
-              continue;
-            // Accumulate into intBuffer
-            intBuffer[pixelIndex + 0] = (unsigned char)(readIntoPixels[pixelIndex + 0]);
-            intBuffer[pixelIndex + 1] = (unsigned char)(readIntoPixels[pixelIndex + 1]);
-            intBuffer[pixelIndex + 2] = (unsigned char)(readIntoPixels[pixelIndex + 2]);
-            // Alpha channel
-            intBuffer[pixelIndex + 3] = 255;
-          }
-        }
-      }
+  cl_int pRNGseed = (cl_int)(((frameIndex << 3) * (tileY * ((WIDTH + tileSize - 1) / tileSize) + tileX) * 0x857379583) * (seed << 8));
+  err = clSetKernelArg(kernel, 7, sizeof(cl_int), &pRNGseed);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to set kernel arg PRNG seed: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+
+  err = clEnqueueNDRangeKernel(queue, kernel, 2, globalOffset, globalSize, nullptr, 0, nullptr, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to enqueue kernel: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+
+  err = clFinish(queue);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to finish command queue: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+
+  // Read back the rendered tile
+  std::vector<unsigned char> readIntoPixels(WIDTH * HEIGHT * 4, 0u);
+  err = clEnqueueReadBuffer(queue, buffers.imageBuffer, CL_TRUE, 0, readIntoPixels.size(), readIntoPixels.data(), 0, nullptr, nullptr);
+  if (err != CL_SUCCESS) {
+    std::cerr << "Failed to read buffer: " << getCLErrorString(err) << std::endl;
+    exit(1);
+  }
+
+  // Copy tile pixels to main pixel buffer
+  if (pixelsMutex) {
+    pixelsMutex->lock();
+  }
+
+  for (size_t pixelY = 0; pixelY < h; pixelY++) {
+    for (size_t pixelX = 0; pixelX < w; pixelX++) {
+      size_t globalX = tileX + pixelX;
+      size_t globalY = tileY + pixelY;
+      if (globalX >= WIDTH || globalY >= HEIGHT)
+        continue;
+
+      size_t pixelIndex = (globalY * WIDTH + globalX) * 4;
+      pixels[pixelIndex + 0] = readIntoPixels[pixelIndex + 0]; // R
+      pixels[pixelIndex + 1] = readIntoPixels[pixelIndex + 1]; // G
+      pixels[pixelIndex + 2] = readIntoPixels[pixelIndex + 2]; // B
+      pixels[pixelIndex + 3] = 255;                            // A
     }
+  }
 
-    numFrames++;
+  if (pixelsMutex) {
+    pixelsMutex->unlock();
   }
-  // Average into pixels
-  for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
-    pixels[i * 4 + 0] = (unsigned char)(intBuffer[i * 4 + 0] / numFrames);
-    pixels[i * 4 + 1] = (unsigned char)(intBuffer[i * 4 + 1] / numFrames);
-    pixels[i * 4 + 2] = (unsigned char)(intBuffer[i * 4 + 2] / numFrames);
-    pixels[i * 4 + 3] = 255;
+}
+
+void multiThreadedCompute(size_t tileSize, std::vector<KernelContext>& deviceKernels, std::vector<unsigned char>& pixels,
+                          std::vector<Buffers>& buffersList) {
+  cl_int err;
+  std::chrono::high_resolution_clock::time_point frameStartTime = std::chrono::high_resolution_clock::now();
+  std::mutex pixelsMutex;
+  std::mutex queueMutex;
+  std::queue<std::pair<size_t, size_t>> tileQueue; // Queue of (tileX, tileY) pairs
+
+  // Populate the tile queue with all tile coordinates
+  for (size_t tileY = 0; tileY < HEIGHT; tileY += tileSize) {
+    for (size_t tileX = 0; tileX < WIDTH; tileX += tileSize) {
+      tileQueue.push({tileX, tileY});
+    }
   }
+
+  size_t tilesTotal = tileQueue.size();
+
+  std::vector<std::thread> threads;
+
+  // Launch threads for each device
+  for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    threads.emplace_back([&, i]() {
+      KernelContext& kernel = deviceKernels[i];
+      Buffers& buffers = buffersList[i];
+      size_t seed = i * 12345; // Different seed per device
+
+      while (true) {
+        std::pair<size_t, size_t> currentTile;
+        {
+          std::lock_guard<std::mutex> lock(queueMutex);
+          if (tileQueue.empty()) {
+            break;
+          }
+          currentTile = tileQueue.front();
+          tileQueue.pop();
+          // Each time a tile is popped off, we will print out the progress to the console
+          std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
+          std::chrono::duration timeElapsed = nowTime - frameStartTime;
+          double percentCompleted = ((double)(tilesTotal - tileQueue.size()) / (double)tilesTotal) * 100.0;
+          unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(timeElapsed).count();
+          // Remaining Time = Time Passed * (1 / Percent Completed - 1)
+          std::cout << "\033[2K\rRendering tile " << (tilesTotal - tileQueue.size()) << " of " << tilesTotal << " (" << percentCompleted << "%) "
+                    << millisecondsPassed << "ms elapsed; " << (unsigned long)(millisecondsPassed * ((100.0 / percentCompleted) - 1.0))
+                    << "ms remaining" << std::flush;
+        }
+
+        size_t tileX = currentTile.first;
+        size_t tileY = currentTile.second;
+
+        renderTile(pixels, kernel.kernel, kernel.queue, buffers, tileX, tileY, tileSize, 0, seed, &pixelsMutex);
+        seed++; // Update seed for next tile
+      }
+    });
+  }
+
+  // Wait for all threads to complete
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::chrono::high_resolution_clock::time_point frameEndTime = std::chrono::high_resolution_clock::now();
+  std::chrono::duration frameDuration = frameEndTime - frameStartTime;
+  unsigned long frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frameDuration).count();
+  std::cout << "\nRendered image in " << frameMilliseconds << " ms." << std::endl;
+
+  // Release buffers for each device
+  for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    releaseBuffers(buffersList[i]);
+  }
+}
+
+void singleThreadedCompute(size_t tileSize, KernelContext& deviceKernel, std::vector<unsigned char>& pixels, Buffers& buffers) {
+  cl_int err;
+  std::chrono::high_resolution_clock::time_point frameStartTime = std::chrono::high_resolution_clock::now();
+  size_t tilesTotal = ((WIDTH + tileSize - 1) / tileSize) * ((HEIGHT + tileSize - 1) / tileSize);
+  size_t tilesCompleted = 0;
+
+  for (size_t tileY = 0; tileY < HEIGHT; tileY += tileSize) {
+    for (size_t tileX = 0; tileX < WIDTH; tileX += tileSize) {
+      renderTile(pixels, deviceKernel.kernel, deviceKernel.queue, buffers, tileX, tileY, tileSize, 0, 0);
+
+      tilesCompleted++;
+      std::chrono::high_resolution_clock::time_point nowTime = std::chrono::high_resolution_clock::now();
+      std::chrono::duration timeElapsed = nowTime - frameStartTime;
+      double percentCompleted = ((double)tilesCompleted / (double)tilesTotal) * 100.0;
+      unsigned long millisecondsPassed = std::chrono::duration_cast<std::chrono::milliseconds>(timeElapsed).count();
+      // Remaining Time = Time Passed * (1 / Percent Completed - 1)
+      std::cout << "\033[2K\rRendering tile " << tilesCompleted << " of " << tilesTotal << " (" << percentCompleted << "%) " << millisecondsPassed
+                << "ms elapsed; " << (unsigned long)(millisecondsPassed * ((100.0 / percentCompleted) - 1.0)) << "ms remaining" << std::flush;
+    }
+  }
+
+  std::chrono::high_resolution_clock::time_point frameEndTime = std::chrono::high_resolution_clock::now();
+  std::chrono::duration frameDuration = frameEndTime - frameStartTime;
+  unsigned long frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frameDuration).count();
+  std::cout << "\nRendered image in " << frameMilliseconds << " ms." << std::endl;
+
+  // Release buffers
+  releaseBuffers(buffers);
 }
 
 // This function is called before ever video frame starts rendering,

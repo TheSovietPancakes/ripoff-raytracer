@@ -294,7 +294,7 @@ int main() {
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 #endif
 
-  std::vector<unsigned char> pixels(WIDTH * HEIGHT * 4, 0);
+  std::vector<unsigned char> pixels(WIDTH * HEIGHT * 4, 0u);
   meshList.emplace_back(mesh);
   CameraInformation camInfo = {.position = {CAMERA_START_X, CAMERA_START_Y, CAMERA_START_Z},
                                .pitch = CAMERA_START_PITCH,
@@ -328,7 +328,6 @@ int main() {
       return 1;
     }
   }
-  Buffers buffers;
 #ifndef RENDER_AND_GET_OUT
   std::chrono::high_resolution_clock::time_point lastRecordedTime = std::chrono::high_resolution_clock::now();
   glfwSetWindowFocusCallback(window, [](GLFWwindow* win, int focused) { windowIsFocused = focused != 0; });
@@ -675,46 +674,73 @@ int main() {
       std::cerr << "failed to set kernel arg rays per pixel: " << getCLErrorString(err) << std::endl;
       return 1;
     }
-    size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), TILE_SIZE);
-    size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
-    size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
-    size_t totalTiles = totalTilesX * totalTilesY;
-    TileInformation tileInfo = {.tileSize = tileSize, .totalTilesX = totalTilesX, .totalTilesY = totalTilesY, .totalTiles = totalTiles};
-    float tilesPerDevice = (float)tileInfo.totalTiles / usedGPUcount;
+  }
+  size_t tileSize = std::min<size_t>(std::min<size_t>(WIDTH, HEIGHT), TILE_SIZE);
+  // Compute number of tiles in X and Y using ceiling division so partial tiles are
+  // counted. totalTiles should be tilesX * tilesY, not floor((w*h)/(t*t)).
+  size_t totalTilesX = (WIDTH + tileSize - 1) / tileSize;
+  size_t totalTilesY = (HEIGHT + tileSize - 1) / tileSize;
+  size_t totalTiles = totalTilesX * totalTilesY;
+  TileInformation tileInfo = {.tileSize = tileSize, .totalTilesX = totalTilesX, .totalTilesY = totalTilesY, .totalTiles = totalTiles};
+  float tilesPerDevice = (float)tileInfo.totalTiles / (float)usedGPUcount;
+  if (VIDEO_FRAME_COUNT > 1) {
+    // // Loop it as if this were a video!
+    // int videoFrameIdx = 0;
+    // while (videoFrameIdx < VIDEO_FRAME_COUNT) {
+    //   for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    //     KernelContext& kernel = deviceKernels[i];
+    //     setupNextVideoFrame(camInfo, videoFrameIdx++);
+    //     Buffers buffers = generateBuffers(triangleList, meshList, nodeList, kernel.ctx, kernel.kernel);
+    //     std::cout << "Rendering video frame " << (videoFrameIdx) << " of " << VIDEO_FRAME_COUNT << std::endl;
+    //     // In this context, "numFrames" is still the pRNG seed for the current averaged-together image.
+    //     numFrames = 0; // Reset for each GPU
+    //     accumulateAndRenderFrame(pixels, numFrames, err, kernel.kernel, camInfo, kernel.queue, buffers, tileInfo, tilesPerDevice * i,
+    //                              (size_t)tilesPerDevice * (i + 1), videoFrameIdx);
+    //     releaseBuffers(buffers);
+    //   }
+    //   std::string path = std::string(VIDEO_FRAME_OUTPUT_DIR) + "/output_" + std::to_string(videoFrameIdx) + ".bmp";
+    //   placeImageDataIntoBMP(pixels, WIDTH, HEIGHT, path);
+    // }
+    // // We're done!
+  } else {
+    setupNextVideoFrame(camInfo, 0);
+    std::vector<Buffers> buffersList(deviceKernels.size());
 
-    if (VIDEO_FRAME_COUNT > 1) {
-      // Loop it as if this were a video!
-      int videoFrameIdx = 0;
-      while (videoFrameIdx < VIDEO_FRAME_COUNT) {
-        setupNextVideoFrame(camInfo, videoFrameIdx++);
-        buffers = generateBuffers(triangleList, meshList, nodeList, kernel.ctx, kernel.kernel);
-        std::cout << "Rendering video frame " << (videoFrameIdx) << " of " << VIDEO_FRAME_COUNT << std::endl;
-        // In this context, "numFrames" is still the pRNG seed for the current averaged-together image.
-        accumulateAndRenderFrame(pixels, numFrames, err, kernel.kernel, camInfo, kernel.queue, buffers, tileInfo, tilesPerDevice,
-                                 (size_t)tilesPerDevice * i, videoFrameIdx);
-        std::string path = std::string(VIDEO_FRAME_OUTPUT_DIR) + "/output_" + std::to_string(videoFrameIdx) + ".bmp";
-        placeImageDataIntoBMP(pixels, WIDTH, HEIGHT, path);
-        releaseBuffers(buffers);
+    for (size_t i = 0; i < deviceKernels.size(); ++i) {
+      KernelContext& kernel = deviceKernels[i];
+      buffersList[i] = generateBuffers(triangleList, meshList, nodeList, kernel.ctx, kernel.kernel);
+      err = clSetKernelArg(kernel.kernel, 6, sizeof(CameraInformation), &camInfo);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to set kernel arg camera information: " << getCLErrorString(err) << std::endl;
+        exit(1);
       }
-      // We're done!
-    } else {
-      setupNextVideoFrame(camInfo, 0);
-      buffers = generateBuffers(triangleList, meshList, nodeList, kernel.ctx, kernel.kernel);
-      std::chrono::high_resolution_clock::time_point frameStartTime = std::chrono::high_resolution_clock::now();
-      accumulateAndRenderFrame(pixels, numFrames, err, kernel.kernel, camInfo, kernel.queue, buffers, tileInfo, (size_t)tilesPerDevice,
-                               tilesPerDevice * i, 0);
-      std::chrono::high_resolution_clock::time_point frameEndTime = std::chrono::high_resolution_clock::now();
-      std::chrono::duration frameDuration = frameEndTime - frameStartTime;
-      unsigned long frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frameDuration).count();
-      std::cout << "Rendered image in " << frameMilliseconds << " ms." << std::endl;
-      placeImageDataIntoBMP(pixels, WIDTH, HEIGHT, "output.bmp");
     }
 
-    releaseKernelContext(kernel);
+    if (usedGPUcount > 1) {
+      multiThreadedCompute(tileSize, deviceKernels, pixels, buffersList);
+    } else {
+      singleThreadedCompute(tileSize, deviceKernels[0], pixels, buffersList[0]);
+    }
+
+    placeImageDataIntoBMP(pixels, WIDTH, HEIGHT, "output.bmp");
+  }
+
+  for (size_t i = 0; i < deviceKernels.size(); ++i) {
+    releaseKernelContext(deviceKernels[i]);
   }
 // We're done!
 #endif
-  releaseBuffers(buffers);
+  for (size_t i = 0; i < usedGPUcount; i++) {
+    cl_device_id d = gpuIdxToDID[usedGPUIndeces[i]];
+    if (d != 0) {
+      err = clReleaseDevice(d);
+      if (err != CL_SUCCESS) {
+        std::cerr << "Failed to release device: " << getCLErrorString(err) << std::endl;
+        return 1;
+      }
+    }
+  }
+
   err = clReleaseDevice(device);
   if (err != CL_SUCCESS && err != CL_INVALID_DEVICE) {
     std::cerr << "Failed to release device: " << getCLErrorString(err) << std::endl;

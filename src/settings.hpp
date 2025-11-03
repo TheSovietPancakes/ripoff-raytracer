@@ -39,8 +39,8 @@ unsigned int MAX_BOUNCE_COUNT = 50; // Self-explanatory
 // These are the dimensions of an iPhone 16, the phone that I have lol
 // unsigned int WIDTH = 1179;
 // unsigned int HEIGHT = 2556;
-unsigned int WIDTH = 500;
-unsigned int HEIGHT = 500;
+unsigned int WIDTH = 512;
+unsigned int HEIGHT = 512;
 // Each frame is split into tiles so that the GPU has a change to refresh
 // the screen and avoid crashing. However, if your GPU is powerful enough,
 // a potential bottleneck could occur in data transfer between CPU/GPU.
