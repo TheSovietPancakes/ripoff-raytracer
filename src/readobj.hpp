@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -381,10 +380,10 @@ void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color
       {
           .bounds =
               {
-                  .min = {fminf(fminf(a.s[0], b.s[0]), fminf(c.s[0], d.s[0])), fminf(fminf(a.s[1], b.s[1]), fminf(c.s[1], d.s[1])),
-                          fminf(fminf(a.s[2], b.s[2]), fminf(c.s[2], d.s[2]))},
-                  .max = {fmaxf(fmaxf(a.s[0], b.s[0]), fmaxf(c.s[0], d.s[0])), fmaxf(fmaxf(a.s[1], b.s[1]), fmaxf(c.s[1], d.s[1])),
-                          fmaxf(fmaxf(a.s[2], b.s[2]), fmaxf(c.s[2], d.s[2]))},
+                  .min = {std::min(std::min(a.s[0], b.s[0]), std::min(c.s[0], d.s[0])), std::min(std::min(a.s[1], b.s[1]), std::min(c.s[1], d.s[1])),
+                          std::min(std::min(a.s[2], b.s[2]), std::min(c.s[2], d.s[2]))},
+                  .max = {std::max(std::max(a.s[0], b.s[0]), std::max(c.s[0], d.s[0])), std::max(std::max(a.s[1], b.s[1]), std::max(c.s[1], d.s[1])),
+                          std::max(std::max(a.s[2], b.s[2]), std::max(c.s[2], d.s[2]))},
               },
           .childIndex = 0,
           .firstTriangleIdx = (cl_uint)triangleList.size(),
