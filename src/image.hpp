@@ -340,7 +340,8 @@ void multiThreadedCompute(size_t tileSize, std::vector<KernelContext>& deviceKer
   std::chrono::high_resolution_clock::time_point frameEndTime = std::chrono::high_resolution_clock::now();
   std::chrono::duration frameDuration = frameEndTime - frameStartTime;
   unsigned long frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frameDuration).count();
-  std::cout << "\nRendered image in " << frameMilliseconds << " ms." << std::endl;
+  std::cout << "\rRendering tile " << tilesTotal << " of " << tilesTotal << " (100%) " << frameMilliseconds << " ms elapsed; 0 ms remaining"
+            << std::endl;
 
   // Release buffers for each device
   for (size_t i = 0; i < deviceKernels.size(); ++i) {
@@ -372,7 +373,8 @@ void singleThreadedCompute(size_t tileSize, KernelContext& deviceKernel, std::ve
   std::chrono::high_resolution_clock::time_point frameEndTime = std::chrono::high_resolution_clock::now();
   std::chrono::duration frameDuration = frameEndTime - frameStartTime;
   unsigned long frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frameDuration).count();
-  std::cout << "\nRendered image in " << frameMilliseconds << " ms." << std::endl;
+  std::cout << "\rRendering tile " << tilesTotal << " of " << tilesTotal << " (100%) " << frameMilliseconds << " ms elapsed; 0 ms remaining"
+            << std::endl;
 
   // Release buffers
   releaseBuffers(buffers);
@@ -407,14 +409,14 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
 
   // Floor (Y = minY)
   addQuad(cl_float3{minX, minY, minZ}, cl_float3{maxX, minY, minZ}, cl_float3{maxX, minY, maxZ}, cl_float3{minX, minY, maxZ}, cl_float3{0, 1, 0},
-          cl_float3{0.0f, 0.8f, 0.0f});
+          {0});
   meshList.back().material = {
-      .type = MaterialType_Checker,
+      .type = MaterialType_Solid,
       .ior = 1.0f,
-      .color = {0.05, 0.05, 0.05},
-      .emissionColor = {0.1, 0.1, 0.1},
-      .emissionStrength = 40.0f,
-      .reflectiveness = 1.0f,
+      .color = {0.1, 0.1, 0.1},
+      .emissionColor = {0, 0, 0},
+      .emissionStrength = 0.0f,
+      .reflectiveness = 0.0f,
       .specularProbability = 1.0f,
   };
 
@@ -427,14 +429,13 @@ void addCornellBoxToScene(const MeshInfo& mesh) {
 
   // Back wall (Z = minZ)
   // addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {0.1f, 0.1f, 0.1f});
-  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {1.0f, 1.0f, 1.0f});
-  meshList.back().material.reflectiveness = 0.9; // slightly less than a mirror
+  addQuad({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, {0, 0, 1}, {0.1, 0.8, 0.1});
 
   // Left wall (X = minX) Blue
-  addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.2f, 0.2f, 0.8f});
+  addQuad({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, {1, 0, 0}, {0.1f, 0.1f, 1.f});
 
   // Right wall (X = maxX) Red
-  addQuad({maxX, minY, minZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {-1, 0, 0}, {0.8f, 0.2f, 0.2f});
+  addQuad({maxX, minY, minZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {-1, 0, 0}, {1.f, 0.2f, 0.2f});
 
   // Light quad on ceiling
   float lx = 50, lz = 50, ly = maxY - 1; // just below ceiling

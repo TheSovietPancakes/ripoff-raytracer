@@ -402,7 +402,8 @@ float CalculateReflectance(float3 inDir, float3 normal, float iorA,
                            float iorB) {
   float refractRatio = iorA / iorB;
   float cosAngleIn = -dot(inDir, normal);
-  if (cosAngleIn <= 0) return 1;
+  if (cosAngleIn <= 0)
+    return 1;
   float sinSqrAngleOfRefraction =
       refractRatio * refractRatio * (1 - cosAngleIn * cosAngleIn);
   if (sinSqrAngleOfRefraction >= 1)
@@ -459,8 +460,8 @@ HitInfo CalculateRayCollisionWithTriangle(Ray worldRay,
     bool cullBackface = (info.material.type != MaterialType_Glassy &&
                          info.material.type != MaterialType_Invisible &&
                          info.material.type != MaterialType_OneSided);
-    HitInfo localHit =
-        RayTriangleBVH(info.nodeIdx, localRay, nodeList, triangles, cullBackface);
+    HitInfo localHit = RayTriangleBVH(info.nodeIdx, localRay, nodeList,
+                                      triangles, cullBackface);
 
     if (localHit.didHit) {
       // Check if the ray hit the backface of a one-sided material
@@ -520,6 +521,15 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
           isEven ? hit.material.color : hit.material.emissionColor;
       hit.material.color = checkerColor;
       hit.material.emissionStrength = 0.0f; // no emission for checker
+
+      bool isSpecularBounce =
+          hit.material.specularProbability >= RandomValue(rngState);
+
+      float3 diffuseDir = normalize(hit.normal + RandomDirection(rngState));
+      float3 specularDir = reflect(ray.direction, hit.normal);
+      ray.direction =
+          normalize(lerp3(diffuseDir, specularDir,
+                          hit.material.reflectiveness * isSpecularBounce));
     }
     if (hit.material.type == MaterialType_Glassy) {
       float iorCurrent = hit.isBackface ? hit.material.ior : iorAir;
@@ -540,7 +550,8 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
 
       // Update ray direction and origin
       ray.direction = willReflect ? reflectDir : refractDir;
-      ray.origin = hit.hitPoint + EPSILON * hit.normal * sign(dot(hit.normal, ray.direction));
+      ray.origin = hit.hitPoint +
+                   EPSILON * hit.normal * sign(dot(hit.normal, ray.direction));
 
       // Adjust throughput to account for reflectance and transmittance
       throughput *= willReflect ? reflectWeight : refractWeight;
@@ -549,7 +560,6 @@ float3 Trace(Ray ray, __private uint *rngState, __global const MeshInfo *meshes,
       bool isSpecularBounce =
           hit.material.specularProbability >= RandomValue(rngState);
 
-      ray.origin = hit.hitPoint + (hit.normal * EPSILON);
       float3 diffuseDir = normalize(hit.normal + RandomDirection(rngState));
       float3 specularDir = reflect(ray.direction, hit.normal);
       ray.direction =

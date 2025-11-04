@@ -45,7 +45,7 @@ unsigned int HEIGHT = 512;
 // the screen and avoid crashing. However, if your GPU is powerful enough,
 // a potential bottleneck could occur in data transfer between CPU/GPU.
 // Update with caution.
-unsigned int TILE_SIZE = 128;
+unsigned int TILE_SIZE = 512;
 // The path, absolute or relative (to the cwd), to the .obj file to load.
 std::string OBJECT_PATH = "knight.obj";
 // How much space there is inside the Cornell box between the model and the walls

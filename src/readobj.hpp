@@ -376,19 +376,18 @@ MeshInfo loadMeshFromOBJFile(const std::string& filename) {
 }
 
 void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color) {
-  Node n =
-      {
-          .bounds =
-              {
-                  .min = {std::min(std::min(a.s[0], b.s[0]), std::min(c.s[0], d.s[0])), std::min(std::min(a.s[1], b.s[1]), std::min(c.s[1], d.s[1])),
-                          std::min(std::min(a.s[2], b.s[2]), std::min(c.s[2], d.s[2]))},
-                  .max = {std::max(std::max(a.s[0], b.s[0]), std::max(c.s[0], d.s[0])), std::max(std::max(a.s[1], b.s[1]), std::max(c.s[1], d.s[1])),
-                          std::max(std::max(a.s[2], b.s[2]), std::max(c.s[2], d.s[2]))},
-              },
-          .childIndex = 0,
-          .firstTriangleIdx = (cl_uint)triangleList.size(),
-          .numTriangles = 2,
-      };
+  Node n = {
+      .bounds =
+          {
+              .min = {std::min(std::min(a.s[0], b.s[0]), std::min(c.s[0], d.s[0])), std::min(std::min(a.s[1], b.s[1]), std::min(c.s[1], d.s[1])),
+                      std::min(std::min(a.s[2], b.s[2]), std::min(c.s[2], d.s[2]))},
+              .max = {std::max(std::max(a.s[0], b.s[0]), std::max(c.s[0], d.s[0])), std::max(std::max(a.s[1], b.s[1]), std::max(c.s[1], d.s[1])),
+                      std::max(std::max(a.s[2], b.s[2]), std::max(c.s[2], d.s[2]))},
+          },
+      .childIndex = 0,
+      .firstTriangleIdx = (cl_uint)triangleList.size(),
+      .numTriangles = 2,
+  };
   nodeList.emplace_back(n);
   SplitBVH(nodeList.size() - 1);
   MeshInfo quadMesh = {.nodeIdx = nodeList.size() - 1, // will be correct after SplitBVH
@@ -398,8 +397,8 @@ void addQuad(float3 a, float3 b, float3 c, float3 d, float3 normal, float3 color
                            .color = color,
                            .emissionColor = {0, 0, 0},
                            .emissionStrength = 0.0f,
-                           .reflectiveness = 1.0f,
-                           .specularProbability = 1.0f,
+                           .reflectiveness = 0.0f,
+                           .specularProbability = 0.0f,
                        }};
 
   // two triangles

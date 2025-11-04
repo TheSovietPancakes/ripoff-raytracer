@@ -2,10 +2,10 @@
 
 // surpress warnings
 using float3 = cl_float3;
+#include <cmath>
 #include <fstream>
 #include <string>
 #include <vector>
-#include <cmath>
 
 struct HSV {
   double h, s, v; // Degrees, [0,1], [0,1]
@@ -179,8 +179,7 @@ float3 normalize(float3 a, float3 b, float3 c) {
 }
 
 #include <iostream>
-template<typename T>
-bool parseDefaultInput(std::istream& in, T* out, bool isNumeric) {
+template <typename T> bool parseDefaultInput(std::istream& in, T* out, bool isNumeric) {
   std::string line;
   std::getline(in, line);
   if (line.empty())
@@ -197,10 +196,10 @@ bool parseDefaultInput(std::istream& in, T* out, bool isNumeric) {
       } else if (typeid(out) == typeid(float*)) {
         float val = std::stof(line);
         *(float*)out = val;
-      } else if (typeid(out) == typeid(char*))  {
+      } else if (typeid(out) == typeid(char*)) {
         char val = static_cast<char>(std::stoi(line));
         *(char*)out = val;
-      } else if (typeid(out) == typeid(unsigned char*))  {
+      } else if (typeid(out) == typeid(unsigned char*)) {
         unsigned char val = static_cast<unsigned char>(std::stoi(line));
         *(unsigned char*)out = val;
       } else {
