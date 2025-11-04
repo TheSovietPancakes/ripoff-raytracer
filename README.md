@@ -45,14 +45,18 @@ Depending on the distro you use, the way you install dependencies may vary. Here
 
 1. Open a new terminal window.
 2. Install dependencies.
-   For Debian-based distros (Ubuntu, Pop!_OS, Debian, etc.):
+
+For Debian-based distros (Ubuntu, Pop!_OS, Debian, etc.):
 
 ```sh
 sudo apt update && sudo apt install cmake ocl-icd-opencl-dev opencl-headers build-essential git
 ```
 
-3. Download this repository if you haven't already. You can choose to download a ZIP archive of the latest push or clone from CLI using git.
-4. From within the terminal, navigate to the folder where this repository is located using `cd /path/to/repo`.
+> Please note that your GPU's drivers are not included in this list. Their
+> installations and implementations, of course, differ greatly from manufacturer to manufacturer.
+
+3. Download this repository if you haven't already. You can choose to download a ZIP archive of the latest push or clone from the git CLI.
+4. Open the terminal to the repository folder. If you used CLI, then run `cd ripoff-raytracer`. If you downloaded the ZIP, then extract it somewhere and open a terminal in that extracted folder.
 5. You should be good-to-go for building. You can run the nice build script I made for Linux by doing `./build.sh` to automatically create a `build` folder, run CMake, and build the project for Release.
 6. You're done! You can close the window. The executable will be in the `build` folder.
 
@@ -62,4 +66,4 @@ There is none. You have to download your own damn 3D models, build your own code
 
 ## Usage
 
-Run the executable. It takes in no arguments, so you can double click it. It will open a new terminal with a progress indicator and output a BMP file in the CWD it was run from called `output.bmp`.
+Run the executable. It takes in no arguments, so you can simply double click it. It will open a new terminal with a progress indicator and output a BMP file in the PWD it was run from called `output.bmp`.
